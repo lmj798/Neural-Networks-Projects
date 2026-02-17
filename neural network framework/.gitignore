@@ -21,6 +21,15 @@ htmlcov/
 # Jupyter
 .ipynb_checkpoints/
 
+# Data & artifacts
+mnist_data/
+fashion_mnist_data/
+cifar10_data/
+*_model_params.npz
+*.ckpt
+*.pt
+*.pth
+
 # Misc
 *.log
 *.tmp
