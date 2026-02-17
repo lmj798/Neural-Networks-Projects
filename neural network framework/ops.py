@@ -203,3 +203,144 @@ class ReLU(TensorOp):
 
 def relu(a):
     return ReLU()(a)
+
+def _im2col(x, kernel_h, kernel_w, stride, padding):
+    x_padded = numpy.pad(
+        x,
+        ((0, 0), (0, 0), (padding, padding), (padding, padding)),
+        mode="constant",
+    )
+    n, c, h, w = x_padded.shape
+    out_h = (h - kernel_h) // stride + 1
+    out_w = (w - kernel_w) // stride + 1
+
+    shape = (n, c, kernel_h, kernel_w, out_h, out_w)
+    strides = (
+        x_padded.strides[0],
+        x_padded.strides[1],
+        x_padded.strides[2],
+        x_padded.strides[3],
+        x_padded.strides[2] * stride,
+        x_padded.strides[3] * stride,
+    )
+    cols = numpy.lib.stride_tricks.as_strided(
+        x_padded, shape=shape, strides=strides
+    )
+    cols = cols.transpose(0, 4, 5, 1, 2, 3).reshape(n * out_h * out_w, -1)
+    return cols, out_h, out_w
+
+
+def _col2im(cols, x_shape, kernel_h, kernel_w, stride, padding, out_h, out_w):
+    n, c, h, w = x_shape
+    h_padded = h + 2 * padding
+    w_padded = w + 2 * padding
+    x_padded = numpy.zeros((n, c, h_padded, w_padded), dtype=cols.dtype)
+
+    cols_reshaped = (
+        cols.reshape(n, out_h, out_w, c, kernel_h, kernel_w)
+        .transpose(0, 3, 4, 5, 1, 2)
+    )
+
+    for y in range(kernel_h):
+        y_max = y + stride * out_h
+        for x in range(kernel_w):
+            x_max = x + stride * out_w
+            x_padded[:, :, y:y_max:stride, x:x_max:stride] += cols_reshaped[:, :, y, x, :, :]
+
+    if padding > 0:
+        return x_padded[:, :, padding:-padding, padding:-padding]
+    return x_padded
+
+
+class Conv2D(TensorOp):
+    def __init__(self, stride=1, padding=0):
+        self.stride = stride
+        self.padding = padding
+
+    def compute(self, x: NDArray, w: NDArray):
+        n, c, h, w_in = x.shape
+        out_channels, in_channels, kernel_h, kernel_w = w.shape
+        if c != in_channels:
+            raise ValueError("Input channels do not match weight channels.")
+
+        cols, out_h, out_w = _im2col(x, kernel_h, kernel_w, self.stride, self.padding)
+        w_col = w.reshape(out_channels, -1)
+        out = cols @ w_col.T
+        out = out.reshape(n, out_h, out_w, out_channels).transpose(0, 3, 1, 2)
+        return out
+
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        x = node.inputs[0].realize_cached_data()
+        w = node.inputs[1].realize_cached_data()
+        n, c, h, w_in = x.shape
+        out_channels, _, kernel_h, kernel_w = w.shape
+
+        cols, out_h, out_w = _im2col(x, kernel_h, kernel_w, self.stride, self.padding)
+        dout = out_grad.realize_cached_data().transpose(0, 2, 3, 1).reshape(-1, out_channels)
+
+        grad_w = dout.T @ cols
+        grad_w = grad_w.reshape(w.shape)
+
+        w_col = w.reshape(out_channels, -1)
+        grad_cols = dout @ w_col
+        grad_x = _col2im(grad_cols, (n, c, h, w_in), kernel_h, kernel_w, self.stride, self.padding, out_h, out_w)
+
+        return Tensor(grad_x, requires_grad=False), Tensor(grad_w, requires_grad=False)
+
+
+def conv2d(a, weight, stride=1, padding=0):
+    return Conv2D(stride=stride, padding=padding)(a, weight)
+
+class Sigmoid(TensorOp):
+    def compute(self, a):
+        return 1 / (1 + numpy.exp(-a))
+
+    def gradient(self, out_grad, node):
+        a = node.inputs[0].realize_cached_data()
+        sig = 1 / (1 + numpy.exp(-a))
+        return out_grad * Tensor(sig * (1 - sig))
+
+def sigmoid(a):
+    return Sigmoid()(a)
+
+class Tanh(TensorOp):
+    def compute(self, a):
+        return numpy.tanh(a)
+
+    def gradient(self, out_grad, node):
+        a = node.inputs[0].realize_cached_data()
+        t = numpy.tanh(a)
+        return out_grad * Tensor(1 - t * t)
+
+def tanh(a):
+    return Tanh()(a)
+
+class LeakyReLU(TensorOp):
+    def __init__(self, negative_slope=0.01):
+        self.negative_slope = negative_slope
+
+    def compute(self, a):
+        return numpy.where(a > 0, a, self.negative_slope * a)
+
+    def gradient(self, out_grad, node):
+        a = node.inputs[0].realize_cached_data()
+        grad = numpy.where(a > 0, 1.0, self.negative_slope)
+        return out_grad * Tensor(grad)
+
+def leaky_relu(a, negative_slope=0.01):
+    return LeakyReLU(negative_slope)(a)
+
+class ELU(TensorOp):
+    def __init__(self, alpha=1.0):
+        self.alpha = alpha
+
+    def compute(self, a):
+        return numpy.where(a > 0, a, self.alpha * (numpy.exp(a) - 1))
+
+    def gradient(self, out_grad, node):
+        a = node.inputs[0].realize_cached_data()
+        grad = numpy.where(a > 0, 1.0, self.alpha * numpy.exp(a))
+        return out_grad * Tensor(grad)
+
+def elu(a, alpha=1.0):
+    return ELU(alpha)(a)

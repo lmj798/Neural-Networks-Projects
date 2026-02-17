@@ -137,10 +137,10 @@ class Tensor(Value):
         return self.realize_cached_data().dtype
 
     def backward(self, out_grad=None):
-        if out_grad:
-            out_grad = out_grad
-        else:
-            out_grad = Tensor(numpy.ones(self.shape))
+        if out_grad is None:
+            out_grad = Tensor(numpy.ones(self.shape), requires_grad=False)
+        elif not isinstance(out_grad, Tensor):
+            out_grad = Tensor(out_grad, requires_grad=False)
         from autograd import compute_gradient_of_variables
         compute_gradient_of_variables(self, out_grad)
 
