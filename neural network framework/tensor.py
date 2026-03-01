@@ -77,11 +77,8 @@ class Value:
     def make_from_op(cls, op: Op, inputs: List["Value"]):
         value = cls.__new__(cls)
         value._init(op, inputs)
-
         if not LAZY_MODE:
-            if not value.requires_grad:
-                return value.detach()
-            value.get_outputs()
+            value.realize_cached_data()
         return value
 
 class Tensor(Value):

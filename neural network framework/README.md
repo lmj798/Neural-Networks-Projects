@@ -1,39 +1,109 @@
 # Neural Network Framework
 
-基于 NumPy 的教学/实验级神经网络框架，包含自动求导、常见算子、基础模块与训练脚本。
+A lightweight neural network framework built with NumPy for learning and experimentation.
+It includes:
+- autograd
+- core tensor ops
+- neural network modules
+- optimizers
+- dataset/dataloader utilities
+- example training scripts
 
-**Features**
-- Tensor 与自动求导
-- 常见算子与激活函数（加/乘/矩阵乘、broadcast、reshape、sum/max、ReLU/Sigmoid/Tanh/LeakyReLU/ELU）
-- 基础模块（Linear、Conv2d、Dropout、Flatten、Sequential）
-- Adam 优化器
-- Dataset 与 DataLoader
-- MNIST / Fashion-MNIST / CIFAR-10 训练示例与基准脚本
-- pytest 测试用例
+## Features
 
-**Quickstart**
-1. `pip install numpy pytest`
-1. `python test_mnist.py --help`
-1. `python test_mnist.py`
-1. `python fashion_mnist.py`
-1. `python fashion_mnist_benchmark.py`
-1. `python cifar10.py`
+- `Tensor` with computation graph and backpropagation
+- Core ops: add/mul/div/matmul, reshape, transpose, broadcast, sum, max
+- Activations: `ReLU`, `Sigmoid`, `Tanh`, `LeakyReLU`, `ELU`
+- Attention:
+  - `MultiHeadSelfAttention`
+  - `SEBlock` (image-friendly channel attention)
+- Loss op: `softmax_cross_entropy` (with backward)
+- NN modules:
+  - `Linear`, `Conv2d`, `Dropout`, `Flatten`, `Sequential`
+  - `LayerNorm`, `TransformerEncoderBlock`, `SEBlock`
+- Optimizers: `SGD`, `Adam`
+- Data pipeline: `Dataset`, `DataLoader`
+- Training examples:
+  - `test_mnist.py`
+  - `fashion_mnist.py`
+  - `cifar10.py`
+  - `attention_experiment.py`
 
-**Tests**
-- `pytest -q`
+## Quick Start
 
-**Notes**
-- 训练脚本会自动下载数据集到 `mnist_data/`、`fashion_mnist_data/`、`cifar10_data/`。
-- 这些数据目录与生成的权重文件已加入 `.gitignore`。
+1. Install dependencies:
+   - `pip install numpy pytest`
+2. Run tests:
+   - `pytest -q`
+3. Run training scripts:
+   - `python test_mnist.py --help`
+   - `python test_mnist.py`
+   - `python fashion_mnist.py`
+   - `python cifar10.py`
+   - `python attention_experiment.py`
+4. CIFAR-10 model variants:
+   - `python cifar10.py --model cnn`
+   - `python cifar10.py --model cnn_se`
+   - `python cifar10.py --model cnn_attn`
+   - `python cifar10.py --model cnn_transformer`
+   - `python cifar10.py --model vit`
 
-**Project Structure**
-- `tensor.py`：Tensor 核心与自动求导接口
-- `autograd.py`：反向传播与拓扑排序
-- `ops.py`：算子与梯度
-- `nn.py`：网络模块与层
-- `optimizers.py`：优化器
-- `data.py`：Dataset 与 DataLoader
-- `test_mnist.py`：MNIST 训练脚本与参数入口
-- `fashion_mnist.py`：Fashion-MNIST 训练与组件测试
-- `fashion_mnist_benchmark.py`：Fashion-MNIST 基准/激活函数对比
-- `cifar10.py`：CIFAR-10 训练脚本
+## Project Structure
+
+- `tensor.py`: tensor object, graph nodes, backward entry
+- `autograd.py`: topological sort and gradient propagation
+- `ops.py`: operator implementations and gradients
+- `nn.py`: module system and common layers
+- `optimizers.py`: optimizer implementations
+- `data.py`: `Dataset` and `DataLoader`
+- `tests/`: core/regression/activation tests
+- `test_mnist.py`: MNIST training script
+- `fashion_mnist.py`: Fashion-MNIST training script
+- `cifar10.py`: CIFAR-10 training script
+- `attention_experiment.py`: baseline vs attention comparison on a synthetic sequence task
+
+## Notes
+
+- Training scripts download datasets automatically when needed.
+- Downloaded datasets are placed under:
+  - `mnist_data/`
+  - `fashion_mnist_data/`
+  - `cifar10_data/`
+- Attention effectiveness can be reproduced with:
+  - `python attention_experiment.py`
+  - default run prints final validation accuracy of baseline and attention models.
+- For image tasks, `cnn_se` is usually a better attention baseline than pure transformer variants in this project.
+
+## Suggested Next Modules / Functions
+
+The following additions would provide the largest practical value:
+
+1. Losses
+- `mse_loss(pred, target)`
+- `nll_loss(log_probs, target)`
+
+2. Normalization Layers
+- `BatchNorm1d`
+- `BatchNorm2d`
+- `LayerNorm`
+
+3. Pooling Ops / Layers
+- `max_pool2d`
+- `avg_pool2d`
+
+4. Regularization / Training Utilities
+- `clip_grad_norm(parameters, max_norm)`
+- `weight_decay` integration in optimizers
+- learning rate schedulers (`StepLR`, `CosineAnnealingLR`)
+
+5. Model Utilities
+- `state_dict()` / `load_state_dict()`
+- checkpoint save/load helpers
+
+6. Data Utilities
+- common transforms (`Normalize`, `RandomCrop`, `RandomHorizontalFlip`)
+- deterministic dataloader seed support
+
+7. Quality and Debug
+- numerical gradient checker utility
+- shape checker/assert helpers for debug mode

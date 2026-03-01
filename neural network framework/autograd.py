@@ -28,7 +28,8 @@ def compute_gradient_of_variables(output_tensor, out_grad):
 def find_topo_sort(node_list: List[Value]) -> List[Value]:
     visited = set()
     topo_order = []
-    topo_sort_dfs(node_list[-1], visited, topo_order)
+    for node in node_list:
+        topo_sort_dfs(node, visited, topo_order)
     return topo_order
 
 def topo_sort_dfs(node, visited, topo_order):

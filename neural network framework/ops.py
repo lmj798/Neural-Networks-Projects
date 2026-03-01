@@ -1,6 +1,39 @@
 import numpy
 from tensor import Tensor, NDArray, Op
 
+def _sum_to_shape(grad: Tensor, shape):
+    if grad.shape == shape:
+        return grad
+
+    if shape == ():
+        return grad.sum()
+
+    grad_shape = grad.shape
+    if len(grad_shape) < len(shape):
+        raise ValueError(f"Cannot reduce gradient shape {grad_shape} to {shape}")
+
+    ndims_added = len(grad_shape) - len(shape)
+    axes_to_sum = list(range(ndims_added))
+
+    for i, (gdim, sdim) in enumerate(zip(grad_shape[ndims_added:], shape)):
+        if sdim == 1 and gdim != 1:
+            axes_to_sum.append(ndims_added + i)
+
+    if axes_to_sum:
+        grad = grad.sum(tuple(sorted(set(axes_to_sum))))
+    if grad.shape != shape:
+        grad = grad.reshape(shape)
+    return grad
+
+
+def _swap_last_two_axes(t: Tensor):
+    if len(t.shape) < 2:
+        raise ValueError("MatMul gradient requires tensors with at least 2 dimensions.")
+    axes = list(range(len(t.shape)))
+    axes[-1], axes[-2] = axes[-2], axes[-1]
+    return t.transpose(tuple(axes))
+
+
 class TensorOp(Op):
     def __call__(self, *args):
         return Tensor.make_from_op(self, args)
@@ -50,7 +83,9 @@ class EWiseMul(TensorOp):
 
     def gradient(self, out_grad: Tensor, node: Tensor):
         a, b = node.inputs
-        return out_grad * b, out_grad * a
+        grad_a = out_grad * b
+        grad_b = out_grad * a
+        return _sum_to_shape(grad_a, a.shape), _sum_to_shape(grad_b, b.shape)
     
 class MulScalar(TensorOp):
     def __init__(self, scalar):
@@ -75,7 +110,9 @@ class EWiseDiv(TensorOp):
 
     def gradient(self, out_grad: Tensor, node: Tensor):
         a, b = node.inputs
-        return out_grad / b, -out_grad * a / (b * b)
+        grad_a = out_grad / b
+        grad_b = (out_grad * a / (b * b)) * -1
+        return _sum_to_shape(grad_a, a.shape), _sum_to_shape(grad_b, b.shape)
 
 class DivScalar(TensorOp):
     def __init__(self, scalar):
@@ -93,7 +130,14 @@ class MatMul(TensorOp):
 
     def gradient(self, out_grad: Tensor, node: Tensor):
         a, b = node.inputs
-        return out_grad @ b.transpose(), a.transpose() @ out_grad
+        if len(a.shape) == 2 and len(b.shape) == 2:
+            grad_a = out_grad @ b.transpose()
+            grad_b = a.transpose() @ out_grad
+        else:
+            grad_a = out_grad @ _swap_last_two_axes(b)
+            grad_b = _swap_last_two_axes(a) @ out_grad
+
+        return _sum_to_shape(grad_a, a.shape), _sum_to_shape(grad_b, b.shape)
 
 class BroadcastTo(TensorOp):
     def __init__(self, shape):
@@ -162,19 +206,21 @@ class Max(TensorOp):
 
     def gradient(self, out_grad: Tensor, node: Tensor):
         a = node.inputs[0]
-        max_val = self.compute(a.realize_cached_data())
+        a_data = a.realize_cached_data()
         if self.axis is None:
-            mask = Tensor(a.realize_cached_data() == max_val)
-            return out_grad.broadcast_to(a.shape) * mask
-        else:
-            shape = list(a.shape)
-            if isinstance(self.axis, int):
-                shape[self.axis] = 1
-            else:
-                for ax in self.axis:
-                    shape[ax] = 1
-            mask = Tensor(a.realize_cached_data() == numpy.reshape(max_val, shape))
-            return out_grad.reshape(tuple(shape)).broadcast_to(a.shape) * mask
+            max_val = numpy.max(a_data)
+            mask = (a_data == max_val).astype(numpy.float32)
+            mask = mask / mask.sum()
+            return out_grad.broadcast_to(a.shape) * Tensor(mask, requires_grad=False)
+
+        axes = self.axis if isinstance(self.axis, tuple) else (self.axis,)
+        axes = tuple(ax if ax >= 0 else ax + a_data.ndim for ax in axes)
+
+        max_keepdims = numpy.max(a_data, axis=axes, keepdims=True)
+        mask = (a_data == max_keepdims).astype(numpy.float32)
+        counts = mask.sum(axis=axes, keepdims=True)
+        mask = mask / counts
+        return out_grad.reshape(max_keepdims.shape).broadcast_to(a.shape) * Tensor(mask, requires_grad=False)
 
 class Transpose(TensorOp):
     def __init__(self, axes=None):
@@ -290,6 +336,114 @@ class Conv2D(TensorOp):
 
 def conv2d(a, weight, stride=1, padding=0):
     return Conv2D(stride=stride, padding=padding)(a, weight)
+
+class SoftmaxCrossEntropy(TensorOp):
+    def compute(self, logits: NDArray, targets: NDArray):
+        if logits.ndim != 2:
+            raise ValueError("softmax_cross_entropy expects logits with shape (batch_size, num_classes)")
+
+        target_indices = numpy.asarray(targets, dtype=numpy.int64).reshape(-1)
+        if logits.shape[0] != target_indices.shape[0]:
+            raise ValueError("Targets length must match logits batch size")
+
+        shifted = logits - numpy.max(logits, axis=1, keepdims=True)
+        log_probs = shifted - numpy.log(numpy.sum(numpy.exp(shifted), axis=1, keepdims=True))
+        losses = -log_probs[numpy.arange(logits.shape[0]), target_indices]
+        return numpy.array(losses.mean(), dtype=logits.dtype)
+
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        logits, targets = node.inputs
+        logits_data = logits.realize_cached_data()
+        target_indices = numpy.asarray(targets.realize_cached_data(), dtype=numpy.int64).reshape(-1)
+
+        shifted = logits_data - numpy.max(logits_data, axis=1, keepdims=True)
+        exp_shifted = numpy.exp(shifted)
+        probs = exp_shifted / numpy.sum(exp_shifted, axis=1, keepdims=True)
+
+        grad_logits = probs
+        grad_logits[numpy.arange(logits_data.shape[0]), target_indices] -= 1.0
+        grad_logits /= logits_data.shape[0]
+
+        grad_logits_tensor = Tensor(grad_logits.astype(logits_data.dtype, copy=False), requires_grad=False) * out_grad
+        grad_targets = Tensor(
+            numpy.zeros(targets.shape, dtype=numpy.float32),
+            requires_grad=False,
+        )
+        return grad_logits_tensor, grad_targets
+
+
+def softmax_cross_entropy(logits, targets):
+    return SoftmaxCrossEntropy()(logits, targets)
+
+class Softmax(TensorOp):
+    def __init__(self, axis=-1):
+        self.axis = axis
+
+    def compute(self, a: NDArray):
+        shifted = a - numpy.max(a, axis=self.axis, keepdims=True)
+        exp_shifted = numpy.exp(shifted)
+        return exp_shifted / numpy.sum(exp_shifted, axis=self.axis, keepdims=True)
+
+    def gradient(self, out_grad, node):
+        probs = node.realize_cached_data()
+        out_grad_data = out_grad.realize_cached_data()
+        dot = numpy.sum(out_grad_data * probs, axis=self.axis, keepdims=True)
+        grad = probs * (out_grad_data - dot)
+        return Tensor(grad, requires_grad=False)
+
+
+def softmax(a, axis=-1):
+    return Softmax(axis=axis)(a)
+
+class LayerNormLastDim(TensorOp):
+    def __init__(self, eps=1e-5):
+        self.eps = eps
+
+    def compute(self, x: NDArray, gamma: NDArray, beta: NDArray):
+        mean = numpy.mean(x, axis=-1, keepdims=True)
+        var = numpy.var(x, axis=-1, keepdims=True)
+        inv_std = 1.0 / numpy.sqrt(var + self.eps)
+        x_hat = (x - mean) * inv_std
+        return x_hat * gamma.reshape((1,) * (x.ndim - 1) + gamma.shape) + beta.reshape((1,) * (x.ndim - 1) + beta.shape)
+
+    def gradient(self, out_grad, node):
+        x, gamma, beta = node.inputs
+        x_data = x.realize_cached_data()
+        gamma_data = gamma.realize_cached_data()
+        out_grad_data = out_grad.realize_cached_data()
+
+        mean = numpy.mean(x_data, axis=-1, keepdims=True)
+        var = numpy.var(x_data, axis=-1, keepdims=True)
+        inv_std = 1.0 / numpy.sqrt(var + self.eps)
+        x_centered = x_data - mean
+        x_hat = x_centered * inv_std
+
+        # Grad wrt affine params.
+        reduce_axes = tuple(range(x_data.ndim - 1))
+        grad_gamma = numpy.sum(out_grad_data * x_hat, axis=reduce_axes)
+        grad_beta = numpy.sum(out_grad_data, axis=reduce_axes)
+
+        # Grad wrt normalized input.
+        n = x_data.shape[-1]
+        gamma_b = gamma_data.reshape((1,) * (x_data.ndim - 1) + gamma_data.shape)
+        dx_hat = out_grad_data * gamma_b
+
+        dvar = numpy.sum(dx_hat * x_centered * -0.5 * (inv_std ** 3), axis=-1, keepdims=True)
+        dmean = (
+            numpy.sum(dx_hat * -inv_std, axis=-1, keepdims=True)
+            + dvar * numpy.mean(-2.0 * x_centered, axis=-1, keepdims=True)
+        )
+        grad_x = dx_hat * inv_std + dvar * (2.0 * x_centered / n) + dmean / n
+
+        return (
+            Tensor(grad_x.astype(x_data.dtype, copy=False), requires_grad=False),
+            Tensor(grad_gamma.astype(gamma_data.dtype, copy=False), requires_grad=False),
+            Tensor(grad_beta.astype(gamma_data.dtype, copy=False), requires_grad=False),
+        )
+
+
+def layer_norm_last_dim(x, gamma, beta, eps=1e-5):
+    return LayerNormLastDim(eps=eps)(x, gamma, beta)
 
 class Sigmoid(TensorOp):
     def compute(self, a):

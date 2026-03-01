@@ -73,4 +73,9 @@ class DataLoader:
             raise StopIteration
         batch_indices = self.ordering[self.idx]
         batch_x, batch_y = self.dataset[batch_indices]
-        return (Tensor(batch_x, requires_grad=False), Tensor(batch_y, dtype="int64", requires_grad=False))
+        batch_x = np.asarray(batch_x)
+        batch_y = np.asarray(batch_y)
+        return (
+            Tensor(batch_x, dtype=batch_x.dtype, requires_grad=False),
+            Tensor(batch_y, dtype=batch_y.dtype, requires_grad=False),
+        )

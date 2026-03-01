@@ -8,9 +8,23 @@ from urllib.request import urlretrieve
 import numpy as np
 
 from tensor import Tensor
-from nn import Sequential, Linear, ReLUModule, Flatten, Dropout, Conv2d
+from nn import (
+    Sequential,
+    Linear,
+    ReLUModule,
+    Flatten,
+    Dropout,
+    Conv2d,
+    Module,
+    MultiHeadSelfAttention,
+    TransformerEncoderBlock,
+    LayerNorm,
+    Parameter,
+    SEBlock,
+)
 from optimizers import Adam
 from data import Dataset, DataLoader
+from ops import softmax_cross_entropy
 
 CIFAR10_URL = "https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz"
 CIFAR10_DIR = "cifar10_data"
@@ -33,6 +47,15 @@ def accuracy(logits, targets):
     return np.mean(predictions == targets)
 
 
+def _safe_extractall(tar, path):
+    abs_target = os.path.abspath(path)
+    for member in tar.getmembers():
+        member_path = os.path.abspath(os.path.join(abs_target, member.name))
+        if os.path.commonpath([abs_target, member_path]) != abs_target:
+            raise ValueError(f"Blocked unsafe path in archive: {member.name}")
+    tar.extractall(path=abs_target)
+
+
 def download_cifar10_data(data_dir=CIFAR10_DIR):
     os.makedirs(data_dir, exist_ok=True)
     archive_path = os.path.join(data_dir, "cifar-10-python.tar.gz")
@@ -48,7 +71,7 @@ def download_cifar10_data(data_dir=CIFAR10_DIR):
     if not os.path.exists(batch_dir):
         print("Extracting CIFAR-10 archive...")
         with tarfile.open(archive_path, "r:gz") as tar:
-            tar.extractall(path=data_dir)
+            _safe_extractall(tar, data_dir)
         print("Extraction complete.")
     else:
         print("CIFAR-10 archive already extracted.")
@@ -134,6 +157,164 @@ class SimpleCIFAR10CNN(Sequential):
         layers.append(Linear(256, 10))
         super().__init__(*layers)
 
+class SimpleCIFAR10CNNSE(Module):
+    def __init__(self, dropout=0.0):
+        super().__init__()
+        self.conv1 = Conv2d(3, 32, kernel_size=3, stride=1, padding=1)
+        self.conv2 = Conv2d(32, 64, kernel_size=3, stride=2, padding=1)
+        self.conv3 = Conv2d(64, 128, kernel_size=3, stride=2, padding=1)
+        self.act = ReLUModule()
+        self.se2 = SEBlock(64, reduction=8)
+        self.se3 = SEBlock(128, reduction=8)
+        self.flatten = Flatten()
+        self.fc1 = Linear(128 * 8 * 8, 256)
+        self.dropout = Dropout(dropout) if dropout > 0 else None
+        self.fc2 = Linear(256, 10)
+
+    def forward(self, x):
+        x = self.act(self.conv1(x))
+        x = self.act(self.conv2(x))
+        x = self.se2(x)
+        x = self.act(self.conv3(x))
+        x = self.se3(x)
+        x = self.flatten(x)
+        x = self.act(self.fc1(x))
+        if self.dropout is not None:
+            x = self.dropout(x)
+        return self.fc2(x)
+
+class SimpleCIFAR10CNNAttention(Module):
+    def __init__(self, dropout=0.0):
+        super().__init__()
+        self.conv1 = Conv2d(3, 32, kernel_size=3, stride=1, padding=1)
+        self.conv2 = Conv2d(32, 64, kernel_size=3, stride=2, padding=1)
+        self.conv3 = Conv2d(64, 128, kernel_size=3, stride=2, padding=1)
+        self.act = ReLUModule()
+        self.attn = MultiHeadSelfAttention(embed_dim=128, num_heads=4)
+        self.flatten = Flatten()
+        self.fc1 = Linear(128 * 8 * 8, 256)
+        self.dropout = Dropout(dropout) if dropout > 0 else None
+        self.fc2 = Linear(256, 10)
+
+    def forward(self, x):
+        x = self.act(self.conv1(x))
+        x = self.act(self.conv2(x))
+        x = self.act(self.conv3(x))
+        batch_size = x.shape[0]
+
+        # (B, C, H, W) -> (B, H*W, C)
+        x = x.transpose((0, 2, 3, 1)).reshape((batch_size, 8 * 8, 128))
+        x = self.attn(x)
+
+        # (B, H*W, C) -> (B, C, H, W)
+        x = x.reshape((batch_size, 8, 8, 128)).transpose((0, 3, 1, 2))
+        x = self.flatten(x)
+        x = self.act(self.fc1(x))
+        if self.dropout is not None:
+            x = self.dropout(x)
+        return self.fc2(x)
+
+class SimpleCIFAR10CNNTransformer(Module):
+    def __init__(self, dropout=0.0, num_layers=2, num_heads=4):
+        super().__init__()
+        self.conv1 = Conv2d(3, 32, kernel_size=3, stride=1, padding=1)
+        self.conv2 = Conv2d(32, 64, kernel_size=3, stride=2, padding=1)
+        self.conv3 = Conv2d(64, 128, kernel_size=3, stride=2, padding=1)
+        self.act = ReLUModule()
+
+        self.embed_dim = 128
+        self.num_tokens = 8 * 8
+        self.pos_embed = Parameter(np.random.normal(0, 0.02, (1, self.num_tokens, self.embed_dim)).astype("float32"))
+        self.blocks = tuple(
+            TransformerEncoderBlock(
+                embed_dim=self.embed_dim,
+                num_heads=num_heads,
+                mlp_ratio=4.0,
+                dropout=dropout,
+            )
+            for _ in range(num_layers)
+        )
+        self.norm = LayerNorm(self.embed_dim)
+        self.dropout = Dropout(dropout) if dropout > 0 else None
+        self.head = Linear(self.embed_dim, 10)
+
+    def forward(self, x):
+        x = self.act(self.conv1(x))
+        x = self.act(self.conv2(x))
+        x = self.act(self.conv3(x))
+
+        batch_size = x.shape[0]
+        x = x.transpose((0, 2, 3, 1)).reshape((batch_size, self.num_tokens, self.embed_dim))
+        x = x + self.pos_embed.broadcast_to(x.shape)
+
+        for block in self.blocks:
+            x = block(x)
+        x = self.norm(x)
+
+        x = x.sum(axis=1) / self.num_tokens
+        if self.dropout is not None:
+            x = self.dropout(x)
+        return self.head(x)
+
+class SimpleCIFAR10ViT(Module):
+    def __init__(
+        self,
+        image_size=32,
+        patch_size=4,
+        in_channels=3,
+        embed_dim=128,
+        num_layers=4,
+        num_heads=4,
+        dropout=0.0,
+    ):
+        super().__init__()
+        if image_size % patch_size != 0:
+            raise ValueError("image_size must be divisible by patch_size.")
+
+        self.image_size = image_size
+        self.patch_size = patch_size
+        self.embed_dim = embed_dim
+        self.num_patches_side = image_size // patch_size
+        self.num_tokens = self.num_patches_side * self.num_patches_side
+        patch_dim = in_channels * patch_size * patch_size
+
+        self.patch_proj = Linear(patch_dim, embed_dim)
+        self.pos_embed = Parameter(np.random.normal(0, 0.02, (1, self.num_tokens, embed_dim)).astype("float32"))
+        self.blocks = tuple(
+            TransformerEncoderBlock(
+                embed_dim=embed_dim,
+                num_heads=num_heads,
+                mlp_ratio=4.0,
+                dropout=dropout,
+            )
+            for _ in range(num_layers)
+        )
+        self.norm = LayerNorm(embed_dim)
+        self.dropout = Dropout(dropout) if dropout > 0 else None
+        self.head = Linear(embed_dim, 10)
+
+    def _patchify(self, x):
+        # x: (B, C, H, W) -> (B, N, C*P*P)
+        b, c, h, w = x.shape
+        p = self.patch_size
+        x = x.reshape((b, c, h // p, p, w // p, p))
+        x = x.transpose((0, 2, 4, 1, 3, 5))
+        return x.reshape((b, self.num_tokens, c * p * p))
+
+    def forward(self, x):
+        x = self._patchify(x)
+        x = self.patch_proj(x)
+        x = x + self.pos_embed.broadcast_to(x.shape)
+
+        for block in self.blocks:
+            x = block(x)
+        x = self.norm(x)
+
+        x = x.sum(axis=1) / self.num_tokens
+        if self.dropout is not None:
+            x = self.dropout(x)
+        return self.head(x)
+
 
 def train_cifar10(
     *,
@@ -187,8 +368,16 @@ def train_cifar10(
         model = SimpleCIFAR10MLP(dropout=dropout)
     elif model == "cnn":
         model = SimpleCIFAR10CNN(dropout=dropout)
+    elif model == "cnn_se":
+        model = SimpleCIFAR10CNNSE(dropout=dropout)
+    elif model == "cnn_attn":
+        model = SimpleCIFAR10CNNAttention(dropout=dropout)
+    elif model == "cnn_transformer":
+        model = SimpleCIFAR10CNNTransformer(dropout=dropout)
+    elif model == "vit":
+        model = SimpleCIFAR10ViT(dropout=dropout)
     else:
-        raise ValueError("model must be 'mlp' or 'cnn'")
+        raise ValueError("model must be 'mlp', 'cnn', 'cnn_se', 'cnn_attn', 'cnn_transformer', or 'vit'")
     optimizer = Adam(model.parameters(), lr=lr)
 
     train_losses = []
@@ -206,23 +395,13 @@ def train_cifar10(
         start_time = time.time()
 
         for batch_idx, (data, target) in enumerate(train_loader):
-            logits = model(data)
-
-            target_data = target.realize_cached_data()
-            if target_data.dtype != np.int64:
-                target_data = target_data.astype(np.int64)
-
             optimizer.zero_grad()
+            logits = model(data)
+            target_data = target.realize_cached_data().astype(np.int64)
+            target_indices = Tensor(target_data, dtype=np.int64, requires_grad=False)
 
-            probs = softmax(logits.realize_cached_data())
-            log_probs = np.log(probs + 1e-8)
-            loss_data = -np.sum(log_probs[np.arange(logits.shape[0]), target_data]) / logits.shape[0]
-
-            grad_logits = probs.copy()
-            grad_logits[np.arange(logits.shape[0]), target_data] -= 1.0
-            grad_logits /= logits.shape[0]
-
-            logits.backward(Tensor(grad_logits, requires_grad=False))
+            loss = softmax_cross_entropy(logits, target_indices)
+            loss.backward()
 
             if weight_decay > 0:
                 for param in model.parameters():
@@ -240,6 +419,7 @@ def train_cifar10(
                         param.grad = grad_data
             optimizer.step()
 
+            loss_data = float(loss.realize_cached_data())
             epoch_loss += loss_data
             pred = np.argmax(logits.realize_cached_data(), axis=1)
             epoch_correct += np.sum(pred == target_data)
@@ -291,7 +471,12 @@ def main():
     parser.add_argument("--normalize", action="store_true")
     parser.add_argument("--dropout", type=float, default=0.0)
     parser.add_argument("--weight-decay", type=float, default=0.0)
-    parser.add_argument("--model", type=str, default="mlp")
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="mlp",
+        choices=["mlp", "cnn", "cnn_se", "cnn_attn", "cnn_transformer", "vit"],
+    )
     args = parser.parse_args()
 
     train_cifar10(
@@ -310,3 +495,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+

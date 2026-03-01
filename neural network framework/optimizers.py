@@ -1,9 +1,6 @@
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 import numpy
 from tensor import Tensor
-
-class ABC():
-    pass
 
 class Optimizer(ABC):
     def __init__(self, params):
