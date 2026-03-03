@@ -17,7 +17,7 @@ def softmax(x):
 
 def download_fashion_mnist_data():
 
-    base_url = "http://fashion-mnist.s3-website.eu-central-1.amazonaws.com/"
+    base_url = "https://github.com/zalandoresearch/fashion-mnist/raw/master/data/fashion/"
     files = {
         'train_images': 'train-images-idx3-ubyte.gz',
         'train_labels': 'train-labels-idx1-ubyte.gz', 
@@ -30,11 +30,11 @@ def download_fashion_mnist_data():
     for name, filename in files.items():
         filepath = os.path.join('fashion_mnist_data', filename)
         if not os.path.exists(filepath):
-            print(f"涓嬭浇 {filename}...")
+            print(f"下载 {filename}...")
             urlretrieve(base_url + filename, filepath)
-            print(f"涓嬭浇瀹屾垚: {filename}")
+            print(f"下载完成: {filename}")
         else:
-            print(f"鏂囦欢宸插瓨鍦? {filename}")
+            print(f"文件已存在: {filename}")
     
     return files
 
@@ -73,49 +73,49 @@ class FashionMNISTNet(Sequential):
 
 def train_fashion_mnist(train_subset_size=5000, test_subset_size=1000, num_epochs=8, batch_size=128, learning_rate=0.001):
 
-    print("寮€濮婩ashion-MNIST绁炵粡缃戠粶璁粌娴嬭瘯...")
+    print("开始Fashion-MNIST神经网络训练测试...")
     print("=" * 60)
     
-    # 涓嬭浇骞跺姞杞紽ashion-MNIST鏁版嵁
-    print("涓嬭浇Fashion-MNIST鏁版嵁闆?..")
+    # 下载并加载Fashion-MNIST数据
+    print("下载Fashion-MNIST数据集...")
     files = download_fashion_mnist_data()
-    print("鍔犺浇Fashion-MNIST鏁版嵁闆?..")
+    print("加载Fashion-MNIST数据集...")
     train_X, train_y, test_X, test_y = load_fashion_mnist_data(files)
     
-    print(f"璁粌鏁版嵁褰㈢姸: {train_X.shape}, 鏍囩褰㈢姸: {train_y.shape}")
-    print(f"娴嬭瘯鏁版嵁褰㈢姸: {test_X.shape}, 鏍囩褰㈢姸: {test_y.shape}")
+    print(f"训练数据形状: {train_X.shape}, 标签形状: {train_y.shape}")
+    print(f"测试数据形状: {test_X.shape}, 标签形状: {test_y.shape}")
     
-    # Fashion-MNIST绫诲埆鏍囩
+    # Fashion-MNIST类别标签
     fashion_labels = [
         'T-shirt/top', 'Trouser', 'Pullover', 'Dress', 'Coat',
         'Sandal', 'Shirt', 'Sneaker', 'Bag', 'Ankle boot'
     ]
-    print(f"鏁版嵁闆嗙被鍒? {fashion_labels}")
+    print(f"数据集类别: {fashion_labels}")
     
-    # 浣跨敤瀛愰泦鏁版嵁浠ュ姞蹇缁?
+    # 使用子集数据以加快训练
     train_X_subset = train_X[:train_subset_size]
     train_y_subset = train_y[:train_subset_size]
     test_X_subset = test_X[:test_subset_size]
     test_y_subset = test_y[:test_subset_size]
     
-    print(f"浣跨敤璁粌瀛愰泦: {train_X_subset.shape}")
-    print(f"浣跨敤娴嬭瘯瀛愰泦: {test_X_subset.shape}")
+    print(f"使用训练子集: {train_X_subset.shape}")
+    print(f"使用测试子集: {test_X_subset.shape}")
     
-    # 鍒涘缓鏁版嵁闆嗗拰鏁版嵁鍔犺浇鍣?
+    # 创建数据集和数据加载器
     train_dataset = Dataset(train_X_subset, train_y_subset)
     test_dataset = Dataset(test_X_subset, test_y_subset)
     
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
     
-    # 鍒涘缓鏇存繁鐨勬ā鍨嬩互搴斿鏇村鏉傜殑Fashion-MNIST
-    print("鍒涘缓鏇存繁鐨勭缁忕綉缁滄ā鍨?..")
+    # 创建更深的模型以应对更复杂的Fashion-MNIST
+    print("创建更深的神经网络模型...")
     model = FashionMNISTNet()
     
-    # 鍒涘缓浼樺寲鍣?
+    # 创建优化器
     optimizer = Adam(model.parameters(), lr=learning_rate)
     
-    print("寮€濮嬭缁?..")
+    print("开始训练...")
     print("-" * 60)
     
     train_losses = []
@@ -130,7 +130,7 @@ def train_fashion_mnist(train_subset_size=5000, test_subset_size=1000, num_epoch
         
         start_time = time.time()
         
-        # 璁粌寰幆
+        # 训练循环
         for batch_idx, (data, target) in enumerate(train_loader):
             optimizer.zero_grad()
             logits = model(data)
@@ -150,14 +150,14 @@ def train_fashion_mnist(train_subset_size=5000, test_subset_size=1000, num_epoch
             if batch_idx % 50 == 0:
                 print(f"Epoch {epoch+1}/{num_epochs}, Batch {batch_idx}, Loss: {loss_data:.4f}")
         
-        # 璁＄畻璁粌鍑嗙‘鐜?
+        # 计算训练准确率
         train_accuracy = epoch_correct / epoch_total
         num_batches = len(train_dataset) // train_loader.batch_size + (1 if len(train_dataset) % train_loader.batch_size else 0)
         avg_loss = epoch_loss / num_batches
         train_losses.append(avg_loss)
         train_accuracies.append(train_accuracy)
         
-        # 娴嬭瘯
+        # 测试
         model.eval()
         test_correct = 0
         test_total = 0
@@ -174,18 +174,18 @@ def train_fashion_mnist(train_subset_size=5000, test_subset_size=1000, num_epoch
         
         epoch_time = time.time() - start_time
         
-        print(f"Epoch {epoch+1}/{num_epochs} 瀹屾垚:")
-        print(f"  璁粌鎹熷け: {avg_loss:.4f}")
-        print(f"  璁粌鍑嗙‘鐜? {train_accuracy:.4f}")
-        print(f"  娴嬭瘯鍑嗙‘鐜? {test_accuracy:.4f}")
+        print(f"Epoch {epoch+1}/{num_epochs} 完成:")
+        print(f"  训练损失: {avg_loss:.4f}")
+        print(f"  训练准确率: {train_accuracy:.4f}")
+        print(f"  测试准确率: {test_accuracy:.4f}")
         print(f"  Time: {epoch_time:.2f}s")
         print("-" * 60)
     
-    print("璁粌瀹屾垚!")
+    print("训练完成!")
     print("=" * 60)
     
-    # 鏈€缁堟祴璇?
-    print("鏈€缁堟ā鍨嬭瘎浼?..")
+    # 最终测试
+    print("最终模型评估...")
     model.eval()
     final_correct = 0
     final_total = 0
@@ -198,58 +198,58 @@ def train_fashion_mnist(train_subset_size=5000, test_subset_size=1000, num_epoch
         final_total += len(target_data)
     
     final_accuracy = final_correct / final_total
-    print(f"鏈€缁堟祴璇曞噯纭巼: {final_accuracy:.4f}")
+    print(f"最终测试准确率: {final_accuracy:.4f}")
     
-    # 淇濆瓨妯″瀷鍙傛暟
-    print("淇濆瓨妯″瀷鍙傛暟...")
+    # 保存模型参数
+    print("保存模型参数...")
     try:
         params = model.parameters()
         param_data = {}
         for i, param in enumerate(params):
             param_data[f'param_{i}'] = param.realize_cached_data()
         np.savez('fashion_mnist_model_params.npz', **param_data)
-        print("妯″瀷鍙傛暟宸蹭繚瀛樺埌 fashion_mnist_model_params.npz")
+        print("模型参数已保存到 fashion_mnist_model_params.npz")
     except Exception as e:
-        print(f"淇濆瓨妯″瀷鍙傛暟鏃跺嚭閿? {e}")
+        print(f"保存模型参数时出错: {e}")
     
     return train_losses, train_accuracies, test_accuracies, final_accuracy
 
 def test_fashion_mnist_components():
 
-    print("娴嬭瘯Fashion-MNIST缁勪欢...")
+    print("测试Fashion-MNIST组件...")
     print("-" * 40)
     
-    # 娴嬭瘯鏁版嵁涓嬭浇
-    print("1. 娴嬭瘯鏁版嵁涓嬭浇...")
+    # 测试数据下载
+    print("1. 测试数据下载...")
     try:
         files = download_fashion_mnist_data()
-        print("PASS 鏁版嵁涓嬭浇鎴愬姛")
+        print("PASS 数据下载成功")
     except Exception as e:
-        print(f"FAIL 鏁版嵁涓嬭浇澶辫触: {e}")
+        print(f"FAIL 数据下载失败: {e}")
         return False
     
-    # 娴嬭瘯鏁版嵁鍔犺浇
-    print("2. 娴嬭瘯鏁版嵁鍔犺浇...")
+    # 测试数据加载
+    print("2. 测试数据加载...")
     try:
         train_X, train_y, test_X, test_y = load_fashion_mnist_data(files)
-        print(f"PASS 璁粌鏁版嵁: {train_X.shape}, 鏍囩: {train_y.shape}")
-        print(f"PASS 娴嬭瘯鏁版嵁: {test_X.shape}, 鏍囩: {test_y.shape}")
+        print(f"PASS 训练数据: {train_X.shape}, 标签: {train_y.shape}")
+        print(f"PASS 测试数据: {test_X.shape}, 标签: {test_y.shape}")
     except Exception as e:
-        print(f"FAIL 鏁版嵁鍔犺浇澶辫触: {e}")
+        print(f"FAIL 数据加载失败: {e}")
         return False
     
-    # 娴嬭瘯妯″瀷鍒涘缓
-    print("3. 娴嬭瘯妯″瀷鍒涘缓...")
+    # 测试模型创建
+    print("3. 测试模型创建...")
     try:
         model = FashionMNISTNet()
         dummy_input = Tensor(np.random.randn(1, 28, 28))
         output = model(dummy_input)
-        print(f"PASS 妯″瀷杈撳嚭褰㈢姸: {output.shape}")
+        print(f"PASS 模型输出形状: {output.shape}")
     except Exception as e:
-        print(f"FAIL 妯″瀷鍒涘缓澶辫触: {e}")
+        print(f"FAIL 模型创建失败: {e}")
         return False
     
-    print("鎵€鏈夌粍浠舵祴璇曢€氳繃!")
+    print("所有组件测试通过!")
     print("-" * 40)
     return True
 
@@ -257,30 +257,30 @@ def test_fashion_mnist_training():
 
     try:
         train_losses, train_accuracies, test_accuracies, final_acc = train_fashion_mnist(
-            train_subset_size=2000,  # 浣跨敤杈冨皬鏁版嵁闆嗕互鍔犲揩娴嬭瘯
+            train_subset_size=2000,  # 使用较小数据集以加快测试
             test_subset_size=500,
-            num_epochs=3,  # 鍑忓皯epochs浠ュ姞蹇祴璇?
+            num_epochs=3,  # 减少epochs以加快测试
             batch_size=128,
             learning_rate=0.001
         )
         
-        # 楠岃瘉璁粌鏄惁鎴愬姛
+        # 验证训练是否成功
         assert len(train_losses) == 3, f"Expected 3 epochs, got {len(train_losses)}"
         assert len(train_accuracies) == 3, f"Expected 3 training accuracies, got {len(train_accuracies)}"
         assert len(test_accuracies) == 3, f"Expected 3 test accuracies, got {len(test_accuracies)}"
         
-        # 楠岃瘉鍑嗙‘鐜囧悎鐞嗭紙Fashion-MNIST杈冮毦锛屼絾搴旇姣旈殢鏈虹寽娴?0%瑕佸ソ锛?
+        # 验证准确率合理（Fashion-MNIST较难，但应该比随机猜测10%要好）
         assert final_acc > 0.6, f"Final test accuracy too low: {final_acc}"
         
-        print(f"PASS Fashion-MNIST璁粌娴嬭瘯閫氳繃锛佹渶缁堟祴璇曞噯纭巼: {final_acc:.4f}")
+        print(f"PASS Fashion-MNIST训练测试通过！最终测试准确率: {final_acc:.4f}")
         
     except Exception as e:
-        print(f"FAIL Fashion-MNIST璁粌娴嬭瘯澶辫触: {e}")
+        print(f"FAIL Fashion-MNIST训练测试失败: {e}")
         raise
 
 def benchmark_training():
 
-    print("Fashion-MNIST璁粌鍩哄噯娴嬭瘯")
+    print("Fashion-MNIST训练基准测试")
     print("=" * 60)
     
     configs = [
@@ -292,7 +292,7 @@ def benchmark_training():
     results = []
     
     for config in configs:
-        print(f"\n寮€濮?{config['name']}...")
+        print(f"\n开始{config['name']}...")
         try:
             train_losses, train_accuracies, test_accuracies, final_acc = train_fashion_mnist(
                 train_subset_size=config['train_size'],
@@ -311,17 +311,17 @@ def benchmark_training():
             }
             results.append(result)
             
-            print(f"{config['name']} 瀹屾垚 - 娴嬭瘯鍑嗙‘鐜? {final_acc:.4f}")
+            print(f"{config['name']} 完成 - 测试准确率: {final_acc:.4f}")
             
         except Exception as e:
-            print(f"{config['name']} 澶辫触: {e}")
+            print(f"{config['name']} 失败: {e}")
     
-    # 杈撳嚭缁撴灉瀵规瘮
+    # 输出结果对比
     print("\n" + "=" * 60)
-    print("鍩哄噯娴嬭瘯缁撴灉瀵规瘮:")
+    print("基准测试结果对比:")
     print("-" * 60)
     for result in results:
-        print(f"{result['name']:12} | 璁粌: {result['final_train_acc']:.4f} | 娴嬭瘯: {result['final_test_acc']:.4f} | 鎹熷け: {result['final_loss']:.4f}")
+        print(f"{result['name']:12} | 训练: {result['final_train_acc']:.4f} | 测试: {result['final_test_acc']:.4f} | 损失: {result['final_loss']:.4f}")
     
     return results
 

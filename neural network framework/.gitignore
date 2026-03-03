@@ -5,6 +5,7 @@ __pycache__/
 
 # Test/cache artifacts
 .pytest_cache/
+pytest-cache-files-*/
 .coverage
 htmlcov/
 .tox/

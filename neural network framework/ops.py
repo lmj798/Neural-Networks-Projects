@@ -245,7 +245,8 @@ class ReLU(TensorOp):
 
     def gradient(self, out_grad, node):
         a = node.inputs[0].realize_cached_data()
-        return out_grad * Tensor(a > 0)
+        grad = (a > 0).astype(a.dtype, copy=False)
+        return out_grad * Tensor(grad, dtype=a.dtype, requires_grad=False)
 
 def relu(a):
     return ReLU()(a)
@@ -452,7 +453,8 @@ class Sigmoid(TensorOp):
     def gradient(self, out_grad, node):
         a = node.inputs[0].realize_cached_data()
         sig = 1 / (1 + numpy.exp(-a))
-        return out_grad * Tensor(sig * (1 - sig))
+        grad = sig * (1 - sig)
+        return out_grad * Tensor(grad, dtype=a.dtype, requires_grad=False)
 
 def sigmoid(a):
     return Sigmoid()(a)
@@ -464,7 +466,8 @@ class Tanh(TensorOp):
     def gradient(self, out_grad, node):
         a = node.inputs[0].realize_cached_data()
         t = numpy.tanh(a)
-        return out_grad * Tensor(1 - t * t)
+        grad = 1 - t * t
+        return out_grad * Tensor(grad, dtype=a.dtype, requires_grad=False)
 
 def tanh(a):
     return Tanh()(a)
@@ -479,7 +482,7 @@ class LeakyReLU(TensorOp):
     def gradient(self, out_grad, node):
         a = node.inputs[0].realize_cached_data()
         grad = numpy.where(a > 0, 1.0, self.negative_slope)
-        return out_grad * Tensor(grad)
+        return out_grad * Tensor(grad, dtype=a.dtype, requires_grad=False)
 
 def leaky_relu(a, negative_slope=0.01):
     return LeakyReLU(negative_slope)(a)
@@ -494,7 +497,7 @@ class ELU(TensorOp):
     def gradient(self, out_grad, node):
         a = node.inputs[0].realize_cached_data()
         grad = numpy.where(a > 0, 1.0, self.alpha * numpy.exp(a))
-        return out_grad * Tensor(grad)
+        return out_grad * Tensor(grad, dtype=a.dtype, requires_grad=False)
 
 def elu(a, alpha=1.0):
     return ELU(alpha)(a)

@@ -94,7 +94,7 @@ class Tensor(Value):
     
     @staticmethod
     def from_numpy(numpy_array, dtype):
-        return numpy.array(numpy_array, dtype=dtype)
+        return Tensor(numpy_array, dtype=dtype, requires_grad=False)
     
     @staticmethod
     def make_from_op(op: Op, inputs: List["Value"]):
