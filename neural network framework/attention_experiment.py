@@ -3,9 +3,9 @@ import numpy as np
 
 from data import DataLoader, Dataset
 from nn import Flatten, Linear, Module, MultiHeadSelfAttention, ReLUModule
-from ops import softmax_cross_entropy
 from optimizers import Adam
 from tensor import Tensor
+from trainer import Trainer
 
 
 def generate_marker_match_data(
@@ -84,36 +84,19 @@ def evaluate(model, loader):
 
 def train_model(model, train_loader, val_loader, epochs=10, lr=1e-3):
     optimizer = Adam(model.parameters(), lr=lr)
-    history = {"train_loss": [], "train_acc": [], "val_acc": []}
-
-    for _ in range(epochs):
-        model.train()
-        loss_sum = 0.0
-        correct = 0
-        count = 0
-
-        for xb, yb in train_loader:
-            optimizer.zero_grad()
-            logits = model(xb)
-            targets = Tensor(yb.realize_cached_data().astype(np.int64), dtype=np.int64, requires_grad=False)
-            loss = softmax_cross_entropy(logits, targets)
-            loss.backward()
-            optimizer.step()
-
-            loss_sum += float(loss.realize_cached_data())
-            pred = np.argmax(logits.realize_cached_data(), axis=1)
-            target_np = yb.realize_cached_data().astype(np.int64)
-            correct += int(np.sum(pred == target_np))
-            count += int(target_np.shape[0])
-
-        train_acc = correct / max(count, 1)
-        val_acc = evaluate(model, val_loader)
-        history["train_loss"].append(loss_sum / max(len(train_loader.ordering), 1))
-        history["train_acc"].append(train_acc)
-        history["val_acc"].append(val_acc)
-
-    return history
-
+    trainer = Trainer(model, optimizer)
+    history = trainer.fit(
+        train_loader,
+        val_loader,
+        epochs=epochs,
+        train_log_every=None,
+        verbose=False,
+    )
+    return {
+        "train_loss": history["train_loss"],
+        "train_acc": history["train_acc"],
+        "val_acc": history["val_acc"],
+    }
 
 def run_experiment(
     seed=42,

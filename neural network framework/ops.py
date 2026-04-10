@@ -126,10 +126,16 @@ class DivScalar(TensorOp):
 
 class MatMul(TensorOp):
     def compute(self, a: NDArray, b: NDArray):
+        if len(a.shape) < 2 or len(b.shape) < 2:
+            raise ValueError("MatMul requires tensors with at least 2 dimensions")
+        if a.shape[-1] != b.shape[-2]:
+            raise ValueError(f"MatMul dimensions mismatch: {a.shape[-1]} != {b.shape[-2]}")
         return a @ b
 
     def gradient(self, out_grad: Tensor, node: Tensor):
         a, b = node.inputs
+        if len(a.shape) < 2 or len(b.shape) < 2:
+            raise ValueError("MatMul requires tensors with at least 2 dimensions")
         if len(a.shape) == 2 and len(b.shape) == 2:
             grad_a = out_grad @ b.transpose()
             grad_b = a.transpose() @ out_grad
@@ -278,6 +284,7 @@ def _im2col(x, kernel_h, kernel_w, stride, padding):
 
 
 def _col2im(cols, x_shape, kernel_h, kernel_w, stride, padding, out_h, out_w):
+    """将列格式转换回图像格式（向量化版本）"""
     n, c, h, w = x_shape
     h_padded = h + 2 * padding
     w_padded = w + 2 * padding
@@ -288,11 +295,14 @@ def _col2im(cols, x_shape, kernel_h, kernel_w, stride, padding, out_h, out_w):
         .transpose(0, 3, 4, 5, 1, 2)
     )
 
+    # 使用广播和向量化操作替代嵌套循环
     for y in range(kernel_h):
-        y_max = y + stride * out_h
         for x in range(kernel_w):
-            x_max = x + stride * out_w
-            x_padded[:, :, y:y_max:stride, x:x_max:stride] += cols_reshaped[:, :, y, x, :, :]
+            # 计算目标位置
+            y_indices = numpy.arange(y, y + stride * out_h, stride)
+            x_indices = numpy.arange(x, x + stride * out_w, stride)
+            # 使用向量化赋值
+            x_padded[:, :, y_indices, x_indices] += cols_reshaped[:, :, y, x, :, :]
 
     if padding > 0:
         return x_padded[:, :, padding:-padding, padding:-padding]

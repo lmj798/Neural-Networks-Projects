@@ -1,8 +1,11 @@
-from typing import Optional, List
+from typing import List, Optional
+
 import numpy as np
+
 from tensor import Tensor
 
-class Dataset():
+
+class Dataset:
     def __init__(self, X, y, transforms: Optional[List] = None, image_shape: Optional[tuple] = (28, 28)):
         self.transforms = transforms
         self.X = X
@@ -44,11 +47,20 @@ class Dataset():
                 x = tform(x)
         return x
 
+
 class DataLoader:
     dataset: Dataset
     batch_size: Optional[int]
 
-    def __init__(self, dataset: Dataset, batch_size: Optional[int] = 1, shuffle: bool = False, device=None):
+    def __init__(
+        self,
+        dataset: Dataset,
+        batch_size: Optional[int] = 1,
+        shuffle: bool = False,
+        device=None,
+        seed: Optional[int] = None,
+        drop_last: bool = False,
+    ):
         if batch_size is None:
             batch_size = len(dataset)
         if batch_size <= 0:
@@ -56,26 +68,52 @@ class DataLoader:
 
         self.dataset = dataset
         self.shuffle = shuffle
-        self.batch_size = batch_size
+        self.batch_size = int(batch_size)
         self.device = device
-        if not self.shuffle:
-            self.ordering = np.array_split(np.arange(len(dataset)), range(batch_size, len(dataset), batch_size))
+        self.seed = seed
+        self.drop_last = drop_last
+        self._rng = np.random.default_rng(seed)
+        self.ordering = self._build_ordering(np.arange(len(dataset), dtype=np.int64))
+
+    def _build_ordering(self, indices: np.ndarray):
+        ordering = []
+        total = int(indices.shape[0])
+        if self.drop_last:
+            total = (total // self.batch_size) * self.batch_size
+        for start in range(0, total, self.batch_size):
+            end = start + self.batch_size
+            batch_indices = indices[start:end]
+            if self.drop_last and batch_indices.shape[0] < self.batch_size:
+                continue
+            ordering.append(batch_indices)
+        return ordering
 
     def __iter__(self):
         if self.shuffle:
-            self.ordering = np.array_split(np.random.permutation(len(self.dataset)), range(self.batch_size, len(self.dataset), self.batch_size))
-        self.idx = -1
+            indices = self._rng.permutation(len(self.dataset))
+        else:
+            indices = np.arange(len(self.dataset), dtype=np.int64)
+        self.ordering = self._build_ordering(indices)
+        self.idx = 0
         return self
 
     def __next__(self):
-        self.idx += 1
         if self.idx >= len(self.ordering):
             raise StopIteration
         batch_indices = self.ordering[self.idx]
+        self.idx += 1
+        # 批量获取数据，减少索引操作次数
         batch_x, batch_y = self.dataset[batch_indices]
-        batch_x = np.asarray(batch_x)
-        batch_y = np.asarray(batch_y)
+        batch_x_np = np.asarray(batch_x)
+        batch_y_np = np.asarray(batch_y)
+        # 保持原始数据类型
         return (
-            Tensor(batch_x, dtype=batch_x.dtype, requires_grad=False),
-            Tensor(batch_y, dtype=batch_y.dtype, requires_grad=False),
+            Tensor(batch_x_np, dtype=batch_x_np.dtype, requires_grad=False),
+            Tensor(batch_y_np, dtype=batch_y_np.dtype, requires_grad=False),
         )
+
+    def __len__(self):
+        dataset_size = len(self.dataset)
+        if self.drop_last:
+            return dataset_size // self.batch_size
+        return (dataset_size + self.batch_size - 1) // self.batch_size

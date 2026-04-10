@@ -24,27 +24,11 @@ from nn import (
 )
 from optimizers import Adam
 from data import Dataset, DataLoader
-from ops import softmax_cross_entropy
+from trainer import Trainer, split_train_val
 
 CIFAR10_URL = "https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz"
 CIFAR10_DIR = "cifar10_data"
 CIFAR10_BATCH_DIR = "cifar-10-batches-py"
-
-
-def softmax(x):
-    exp_x = np.exp(x - np.max(x, axis=1, keepdims=True))
-    return exp_x / np.sum(exp_x, axis=1, keepdims=True)
-
-
-def cross_entropy(logits, targets):
-    num_samples = logits.shape[0]
-    log_probs = np.log(softmax(logits) + 1e-8)
-    return -np.sum(log_probs[np.arange(num_samples), targets]) / num_samples
-
-
-def accuracy(logits, targets):
-    predictions = np.argmax(logits, axis=1)
-    return np.mean(predictions == targets)
 
 
 def _safe_extractall(tar, path):
@@ -324,6 +308,7 @@ def train_cifar10(
     lr: float = 0.001,
     train_subset_size: int = 5000,
     test_subset_size: int = 1000,
+    val_subset_size: int = None,
     normalize: bool = False,
     dropout: float = 0.0,
     weight_decay: float = 0.0,
@@ -336,31 +321,43 @@ def train_cifar10(
     download_cifar10_data()
     train_X, train_y, test_X, test_y = load_cifar10_data()
 
-    print(f"Train data: {train_X.shape}, labels: {train_y.shape}")
-    print(f"Test data: {test_X.shape}, labels: {test_y.shape}")
-
     train_subset_size = min(train_subset_size, len(train_X))
     test_subset_size = min(test_subset_size, len(test_X))
+    if train_subset_size < 2:
+        raise ValueError("train_subset_size must be at least 2 so train/val split is possible.")
+
+    if val_subset_size is None:
+        val_subset_size = max(1, int(train_subset_size * 0.1))
+    val_subset_size = min(max(1, val_subset_size), train_subset_size - 1)
 
     train_X_subset = train_X[:train_subset_size]
     train_y_subset = train_y[:train_subset_size]
     test_X_subset = test_X[:test_subset_size]
     test_y_subset = test_y[:test_subset_size]
 
+    train_X_split, train_y_split, val_X_split, val_y_split = split_train_val(
+        train_X_subset,
+        train_y_subset,
+        val_size=val_subset_size,
+        seed=seed,
+    )
+
     transforms = None
     if normalize:
-        mean = train_X_subset.mean(axis=(0, 2, 3))
-        std = train_X_subset.std(axis=(0, 2, 3)) + 1e-8
+        mean = train_X_split.mean(axis=(0, 2, 3))
+        std = train_X_split.std(axis=(0, 2, 3)) + 1e-8
 
         def _normalize(x):
             return (x - mean[:, None, None]) / std[:, None, None]
 
         transforms = [_normalize]
 
-    train_dataset = Dataset(train_X_subset, train_y_subset, transforms=transforms, image_shape=(3, 32, 32))
+    train_dataset = Dataset(train_X_split, train_y_split, transforms=transforms, image_shape=(3, 32, 32))
+    val_dataset = Dataset(val_X_split, val_y_split, transforms=transforms, image_shape=(3, 32, 32))
     test_dataset = Dataset(test_X_subset, test_y_subset, transforms=transforms, image_shape=(3, 32, 32))
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
     print("Building model...")
@@ -378,87 +375,48 @@ def train_cifar10(
         model = SimpleCIFAR10ViT(dropout=dropout)
     else:
         raise ValueError("model must be 'mlp', 'cnn', 'cnn_se', 'cnn_attn', 'cnn_transformer', or 'vit'")
+
     optimizer = Adam(model.parameters(), lr=lr)
 
-    train_losses = []
-    train_accuracies = []
-    test_accuracies = []
+    def _apply_weight_decay(model_obj):
+        if weight_decay <= 0:
+            return
+        for param in model_obj.parameters():
+            if param.grad is None:
+                continue
+            grad_data = (
+                param.grad.realize_cached_data()
+                if isinstance(param.grad, Tensor)
+                else param.grad
+            )
+            grad_data = grad_data + weight_decay * param.realize_cached_data()
+            if isinstance(param.grad, Tensor):
+                param.grad.cached_data = grad_data
+            else:
+                param.grad = grad_data
+
+    trainer = Trainer(
+        model,
+        optimizer,
+        grad_modifier=_apply_weight_decay if weight_decay > 0 else None,
+    )
 
     print("Training...")
     print("-" * 50)
+    history = trainer.fit(
+        train_loader,
+        val_loader,
+        epochs=num_epochs,
+        train_log_every=100,
+        verbose=True,
+    )
 
-    for epoch in range(num_epochs):
-        model.train()
-        epoch_loss = 0.0
-        epoch_correct = 0
-        epoch_total = 0
-        start_time = time.time()
+    final_test_loss, final_test_accuracy = trainer.evaluate(test_loader)
+    print("Final test evaluation:")
+    print(f"  Test loss: {final_test_loss:.4f}")
+    print(f"  Test accuracy: {final_test_accuracy:.4f}")
 
-        for batch_idx, (data, target) in enumerate(train_loader):
-            optimizer.zero_grad()
-            logits = model(data)
-            target_data = target.realize_cached_data().astype(np.int64)
-            target_indices = Tensor(target_data, dtype=np.int64, requires_grad=False)
-
-            loss = softmax_cross_entropy(logits, target_indices)
-            loss.backward()
-
-            if weight_decay > 0:
-                for param in model.parameters():
-                    if param.grad is None:
-                        continue
-                    grad_data = (
-                        param.grad.realize_cached_data()
-                        if isinstance(param.grad, Tensor)
-                        else param.grad
-                    )
-                    grad_data = grad_data + weight_decay * param.realize_cached_data()
-                    if isinstance(param.grad, Tensor):
-                        param.grad.cached_data = grad_data
-                    else:
-                        param.grad = grad_data
-            optimizer.step()
-
-            loss_data = float(loss.realize_cached_data())
-            epoch_loss += loss_data
-            pred = np.argmax(logits.realize_cached_data(), axis=1)
-            epoch_correct += np.sum(pred == target_data)
-            epoch_total += len(target_data)
-
-            if batch_idx % 100 == 0:
-                print(f"Epoch {epoch + 1}/{num_epochs}, Batch {batch_idx}, Loss: {loss_data:.4f}")
-
-        train_accuracy = epoch_correct / epoch_total if epoch_total else 0.0
-        num_batches = len(train_dataset) // train_loader.batch_size + (
-            1 if len(train_dataset) % train_loader.batch_size else 0
-        )
-        avg_loss = epoch_loss / num_batches
-        train_losses.append(avg_loss)
-        train_accuracies.append(train_accuracy)
-
-        model.eval()
-        test_correct = 0
-        test_total = 0
-        for data, target in test_loader:
-            logits = model(data)
-            pred = np.argmax(logits.realize_cached_data(), axis=1)
-            target_data = target.realize_cached_data()
-            test_correct += np.sum(pred == target_data)
-            test_total += len(target_data)
-
-        test_accuracy = test_correct / test_total if test_total else 0.0
-        test_accuracies.append(test_accuracy)
-
-        epoch_time = time.time() - start_time
-        print(f"Epoch {epoch + 1}/{num_epochs} summary:")
-        print(f"  Loss: {avg_loss:.4f}")
-        print(f"  Train accuracy: {train_accuracy:.4f}")
-        print(f"  Test accuracy: {test_accuracy:.4f}")
-        print(f"  Time: {epoch_time:.2f}s")
-        print("-" * 50)
-
-    return train_losses, train_accuracies, test_accuracies
-
+    return history["train_loss"], history["train_acc"], history["val_acc"], final_test_accuracy
 
 def main():
     parser = argparse.ArgumentParser(description="Train an MLP on CIFAR-10.")
@@ -468,6 +426,7 @@ def main():
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--train-subset", type=int, default=5000)
     parser.add_argument("--test-subset", type=int, default=1000)
+    parser.add_argument("--val-subset", type=int, default=None)
     parser.add_argument("--normalize", action="store_true")
     parser.add_argument("--dropout", type=float, default=0.0)
     parser.add_argument("--weight-decay", type=float, default=0.0)
@@ -486,6 +445,7 @@ def main():
         lr=args.lr,
         train_subset_size=args.train_subset,
         test_subset_size=args.test_subset,
+        val_subset_size=args.val_subset,
         normalize=args.normalize,
         dropout=args.dropout,
         weight_decay=args.weight_decay,

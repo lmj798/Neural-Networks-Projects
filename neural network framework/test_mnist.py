@@ -7,11 +7,11 @@ from urllib.request import urlretrieve
 
 import numpy as np
 
-from tensor import Tensor
-from nn import Sequential, Linear, ReLUModule, Flatten
+from data import DataLoader, Dataset
+from nn import Flatten, Linear, ReLUModule, Sequential
 from optimizers import Adam
-from data import Dataset, DataLoader
-from ops import softmax_cross_entropy
+from tensor import Tensor
+from trainer import Trainer, split_train_val
 
 MNIST_FILES = {
     "train_images": "train-images-idx3-ubyte.gz",
@@ -20,18 +20,6 @@ MNIST_FILES = {
     "test_labels": "t10k-labels-idx1-ubyte.gz",
 }
 
-def softmax(x):
-    exp_x = np.exp(x - np.max(x, axis=1, keepdims=True))
-    return exp_x / np.sum(exp_x, axis=1, keepdims=True)
-
-def cross_entropy(logits, targets):
-    num_samples = logits.shape[0]
-    log_probs = np.log(softmax(logits) + 1e-8)
-    return -np.sum(log_probs[np.arange(num_samples), targets]) / num_samples
-
-def accuracy(logits, targets):
-    predictions = np.argmax(logits, axis=1)
-    return np.mean(predictions == targets)
 
 class SimpleMNISTNet(Sequential):
     def __init__(self):
@@ -41,97 +29,98 @@ class SimpleMNISTNet(Sequential):
             ReLUModule(),
             Linear(256, 128),
             ReLUModule(),
-            Linear(128, 10)
+            Linear(128, 10),
         )
+
 
 def download_mnist_data():
     """Download MNIST data files."""
     base_url = "https://storage.googleapis.com/cvdf-datasets/mnist/"
     files = MNIST_FILES
-    
-    os.makedirs('mnist_data', exist_ok=True)
-    
-    for name, filename in files.items():
-        filepath = os.path.join('mnist_data', filename)
+
+    os.makedirs("mnist_data", exist_ok=True)
+
+    for _, filename in files.items():
+        filepath = os.path.join("mnist_data", filename)
         if not os.path.exists(filepath):
-            print(f"下载 {filename}...")
+            print(f"Downloading {filename}...")
             urlretrieve(base_url + filename, filepath)
-            print(f"下载完成: {filename}")
+            print(f"Downloaded: {filename}")
         else:
-            print(f"文件已存在: {filename}")
-    
+            print(f"Already exists: {filename}")
+
     return files
+
 
 def load_mnist_data(files):
     """Load MNIST data arrays from local files."""
+
     def load_images(filename):
-        with gzip.open(filename, 'rb') as f:
-            magic, num, rows, cols = struct.unpack('>IIII', f.read(16))
+        with gzip.open(filename, "rb") as f:
+            _, num, rows, cols = struct.unpack(">IIII", f.read(16))
             return np.frombuffer(f.read(), dtype=np.uint8).reshape(num, rows, cols).astype(np.float32) / 255.0
-    
+
     def load_labels(filename):
-        with gzip.open(filename, 'rb') as f:
-            magic, num = struct.unpack('>II', f.read(8))
+        with gzip.open(filename, "rb") as f:
+            _, _ = struct.unpack(">II", f.read(8))
             return np.frombuffer(f.read(), dtype=np.uint8)
-    
-    train_images = load_images(os.path.join('mnist_data', files['train_images']))
-    train_labels = load_labels(os.path.join('mnist_data', files['train_labels']))
-    test_images = load_images(os.path.join('mnist_data', files['test_images']))
-    test_labels = load_labels(os.path.join('mnist_data', files['test_labels']))
-    
+
+    train_images = load_images(os.path.join("mnist_data", files["train_images"]))
+    train_labels = load_labels(os.path.join("mnist_data", files["train_labels"]))
+    test_images = load_images(os.path.join("mnist_data", files["test_images"]))
+    test_labels = load_labels(os.path.join("mnist_data", files["test_labels"]))
+
     return train_images, train_labels, test_images, test_labels
 
+
 def _mnist_files_available(files):
-    return all(os.path.exists(os.path.join('mnist_data', filename)) for filename in files.values())
+    return all(os.path.exists(os.path.join("mnist_data", filename)) for filename in files.values())
 
 
 def generate_dummy_mnist_data(num_samples=1000, num_classes=10, seed=42):
-    """生成模拟MNIST数据用于测试"""
+    """Generate synthetic MNIST-like data for testing."""
     rng = np.random.default_rng(seed)
-    
-    # 生成随机图像数据 (28x28 = 784)
+
+    # Generate noisy 28x28 grayscale images.
     X = rng.normal(loc=0.0, scale=0.5, size=(num_samples, 28, 28))
-    # 添加一些结构使数据更真实
+
+    # Add simple class-dependent patterns near the center.
     for i in range(num_samples):
         digit = i % num_classes
-        # 在中心区域添加数字模式
         center = 14
         for j in range(5):
             for k in range(5):
                 if digit == 0 or (digit == 1 and k == 2):
-                    X[i, center+j-2, center+k-2] += 1.0
+                    X[i, center + j - 2, center + k - 2] += 1.0
                 elif digit == 2:
                     if j == k or j + k == 4:
-                        X[i, center+j-2, center+k-2] += 1.0
+                        X[i, center + j - 2, center + k - 2] += 1.0
                 elif digit == 3:
                     if k == 2 or j == 0 or j == 4:
-                        X[i, center+j-2, center+k-2] += 1.0
+                        X[i, center + j - 2, center + k - 2] += 1.0
                 elif digit == 4:
                     if j == 0 or j == 2 or (j == 1 and k == 0):
-                        X[i, center+j-2, center+k-2] += 1.0
+                        X[i, center + j - 2, center + k - 2] += 1.0
                 elif digit == 5:
                     if k == 0 or k == 4 or j == 2:
-                        X[i, center+j-2, center+k-2] += 1.0
+                        X[i, center + j - 2, center + k - 2] += 1.0
                 elif digit == 6:
                     if k == 0 or j == 2 or j == 4:
-                        X[i, center+j-2, center+k-2] += 1.0
+                        X[i, center + j - 2, center + k - 2] += 1.0
                 elif digit == 7:
                     if j == k or k == 0:
-                        X[i, center+j-2, center+k-2] += 1.0
+                        X[i, center + j - 2, center + k - 2] += 1.0
                 elif digit == 8:
                     if j == 2 or k == 2 or j == k or j + k == 4:
-                        X[i, center+j-2, center+k-2] += 1.0
+                        X[i, center + j - 2, center + k - 2] += 1.0
                 elif digit == 9:
                     if j == 2 or (j == 0 and k == 2) or (j == 4 and k == 2):
-                        X[i, center+j-2, center+k-2] += 1.0
-    
-    # 生成标签
+                        X[i, center + j - 2, center + k - 2] += 1.0
+
     y = np.arange(num_samples) % num_classes
-    
-    # 添加噪声
     X += rng.normal(loc=0.0, scale=0.1, size=X.shape)
-    
     return X, y
+
 
 def train_mnist(
     *,
@@ -141,6 +130,7 @@ def train_mnist(
     lr: float = 0.001,
     train_subset_size: int = 5000,
     test_subset_size: int = 1000,
+    val_subset_size: int = None,
     data_mode: str = "auto",
     save_model_params: bool = True,
 ):
@@ -148,11 +138,10 @@ def train_mnist(
     if data_mode not in {"auto", "download", "local", "dummy"}:
         raise ValueError("data_mode must be one of: 'auto', 'download', 'local', 'dummy'")
 
-    print("开始MNIST神经网络训练测试...")
+    print("Preparing MNIST training...")
     print("=" * 50)
 
-    # 下载并加载真实MNIST数据
-    print("下载MNIST数据集...")
+    print("Loading MNIST data...")
     if data_mode == "dummy":
         train_X, train_y = generate_dummy_mnist_data(
             num_samples=max(train_subset_size, 1000),
@@ -175,7 +164,7 @@ def train_mnist(
         except Exception as e:
             if data_mode in {"download", "local"}:
                 raise
-            print(f"MNIST unavailable, fallback to dummy data: {e}")
+            print(f"MNIST unavailable, falling back to dummy data: {e}")
             train_X, train_y = generate_dummy_mnist_data(
                 num_samples=max(train_subset_size, 1000),
                 seed=seed,
@@ -184,134 +173,77 @@ def train_mnist(
                 num_samples=max(test_subset_size, 500),
                 seed=seed + 1,
             )
-    print("加载MNIST数据集...")
-    # Data already prepared in the branch above.
 
-    print(f"训练数据形状: {train_X.shape}, 标签形状: {train_y.shape}")
-    print(f"测试数据形状: {test_X.shape}, 标签形状: {test_y.shape}")
+    print(f"Train data: {train_X.shape}, labels: {train_y.shape}")
+    print(f"Test data:  {test_X.shape}, labels: {test_y.shape}")
 
-    # 使用部分数据以加快训练
     train_subset_size = min(train_subset_size, len(train_X))
     test_subset_size = min(test_subset_size, len(test_X))
+    if train_subset_size < 2:
+        raise ValueError("train_subset_size must be at least 2 so train/val split is possible.")
+
+    if val_subset_size is None:
+        val_subset_size = max(1, int(train_subset_size * 0.1))
+    val_subset_size = min(max(1, val_subset_size), train_subset_size - 1)
 
     train_X_subset = train_X[:train_subset_size]
     train_y_subset = train_y[:train_subset_size]
     test_X_subset = test_X[:test_subset_size]
     test_y_subset = test_y[:test_subset_size]
 
-    train_dataset = Dataset(train_X_subset, train_y_subset)
+    train_X_split, train_y_split, val_X_split, val_y_split = split_train_val(
+        train_X_subset,
+        train_y_subset,
+        val_size=val_subset_size,
+        seed=seed,
+    )
+
+    train_dataset = Dataset(train_X_split, train_y_split)
+    val_dataset = Dataset(val_X_split, val_y_split)
     test_dataset = Dataset(test_X_subset, test_y_subset)
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, seed=seed)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-    # 创建模型
-    print("创建神经网络模型...")
+    print("Building model...")
     model = SimpleMNISTNet()
-
-    # 创建优化器
     optimizer = Adam(model.parameters(), lr=lr)
-    
-    print("开始训练...")
+    trainer = Trainer(model, optimizer)
+
+    print("Training...")
     print("-" * 50)
-    
-    train_losses = []
-    train_accuracies = []
-    test_accuracies = []
-    
-    for epoch in range(num_epochs):
-        model.train()
-        epoch_loss = 0.0
-        epoch_correct = 0
-        epoch_total = 0
-        
-        start_time = time.time()
-        
-        # 训练循环
-        for batch_idx, (data, target) in enumerate(train_loader):
-            optimizer.zero_grad()
-            logits = model(data)
-            target_data = target.realize_cached_data().astype(np.int64)
-            target_indices = Tensor(target_data, dtype=np.int64, requires_grad=False)
+    start_time = time.time()
+    history = trainer.fit(
+        train_loader,
+        val_loader,
+        epochs=num_epochs,
+        train_log_every=100,
+        verbose=True,
+    )
+    total_time = time.time() - start_time
+    print(f"Training finished in {total_time:.2f}s")
 
-            loss = softmax_cross_entropy(logits, target_indices)
-            loss.backward()
-            optimizer.step()
+    print("Evaluating test set...")
+    final_test_loss, final_test_accuracy = trainer.evaluate(test_loader)
+    print(f"Test loss: {final_test_loss:.4f}")
+    print(f"Test accuracy: {final_test_accuracy:.4f}")
 
-            loss_data = float(loss.realize_cached_data())
-            epoch_loss += loss_data
-            pred = np.argmax(logits.realize_cached_data(), axis=1)
-            epoch_correct += np.sum(pred == target_data)
-            epoch_total += len(target_data)
+    if save_model_params:
+        print("Saving model parameters...")
+        try:
+            np.savez("mnist_model_params.npz", **model.state_dict())
+            print("Saved to mnist_model_params.npz")
+        except Exception as e:
+            print(f"Failed to save model parameters: {e}")
 
-            if batch_idx % 100 == 0:
-                print(f"Epoch {epoch+1}/{num_epochs}, Batch {batch_idx}, Loss: {loss_data:.4f}")
-        
-        # 计算训练准确率
-        train_accuracy = epoch_correct / epoch_total
-        num_batches = len(train_dataset) // train_loader.batch_size + (1 if len(train_dataset) % train_loader.batch_size else 0)
-        avg_loss = epoch_loss / num_batches
-        train_losses.append(avg_loss)
-        train_accuracies.append(train_accuracy)
-        
-        # 测试
-        model.eval()
-        test_correct = 0
-        test_total = 0
-        
-        for data, target in test_loader:
-            logits = model(data)
-            pred = np.argmax(logits.realize_cached_data(), axis=1)
-            target_data = target.realize_cached_data()
-            test_correct += np.sum(pred == target_data)
-            test_total += len(target_data)
-        
-        test_accuracy = test_correct / test_total
-        test_accuracies.append(test_accuracy)
-        
-        epoch_time = time.time() - start_time
-        
-        print(f"Epoch {epoch+1}/{num_epochs} 完成:")
-        print(f"  训练损失: {avg_loss:.4f}")
-        print(f"  训练准确率: {train_accuracy:.4f}")
-        print(f"  测试准确率: {test_accuracy:.4f}")
-        print(f"  Time: {epoch_time:.2f}s")
-        print("-" * 50)
-    
-    print("训练完成!")
-    print("=" * 50)
-    
-    # 最终测试
-    print("最终模型评估...")
-    model.eval()
-    final_correct = 0
-    final_total = 0
-    
-    for data, target in test_loader:
-        logits = model(data)
-        pred = np.argmax(logits.realize_cached_data(), axis=1)
-        target_data = target.realize_cached_data()
-        final_correct += np.sum(pred == target_data)
-        final_total += len(target_data)
-    
-    final_accuracy = final_correct / final_total
-    if not save_model_params:
-        return train_losses, train_accuracies, test_accuracies
-    print(f"最终测试准确率: {final_accuracy:.4f}")
-    
-    # 保存模型参数（可选）
-    print("保存模型参数...")
-    try:
-        params = model.parameters()
-        param_data = {}
-        for i, param in enumerate(params):
-            param_data[f'param_{i}'] = param.realize_cached_data()
-        np.savez('mnist_model_params.npz', **param_data)
-        print("模型参数已保存到 mnist_model_params.npz")
-    except Exception as e:
-        print(f"保存模型参数时出错: {e}")
-    
-    return train_losses, train_accuracies, test_accuracies
+    return (
+        history["train_loss"],
+        history["train_acc"],
+        history["val_acc"],
+        final_test_accuracy,
+    )
+
 
 def test_individual_components():
     """Quick checks for basic framework pieces."""
@@ -353,9 +285,9 @@ def test_individual_components():
 
 
 def test_mnist_training():
-    """测试MNIST完整训练过程"""
+    """Test the end-to-end MNIST training pipeline."""
     try:
-        train_losses, train_accuracies, test_accuracies = train_mnist(
+        train_losses, train_accuracies, val_accuracies, final_test_accuracy = train_mnist(
             num_epochs=3,
             train_subset_size=2000,
             test_subset_size=500,
@@ -363,19 +295,14 @@ def test_mnist_training():
             save_model_params=False,
         )
 
-        # 验证训练是否成功
         assert len(train_losses) == 3, f"Expected 3 epochs, got {len(train_losses)}"
         assert len(train_accuracies) == 3, f"Expected 3 training accuracies, got {len(train_accuracies)}"
-        assert len(test_accuracies) == 3, f"Expected 3 test accuracies, got {len(test_accuracies)}"
+        assert len(val_accuracies) == 3, f"Expected 3 validation accuracies, got {len(val_accuracies)}"
+        assert final_test_accuracy > 0.65, f"Final test accuracy too low: {final_test_accuracy}"
 
-        # 验证准确率合理（应该比随机猜测10%要好）
-        final_test_accuracy = test_accuracies[-1]
-        assert final_test_accuracy > 0.7, f"Final test accuracy too low: {final_test_accuracy}"
-
-        print(f"PASS MNIST训练测试通过！最终测试准确率: {final_test_accuracy:.4f}")
-
+        print(f"PASS MNIST training test passed, final test accuracy: {final_test_accuracy:.4f}")
     except Exception as e:
-        print(f"FAIL MNIST训练测试失败: {e}")
+        print(f"FAIL MNIST training test failed: {e}")
         raise
 
 
@@ -387,6 +314,7 @@ def _parse_args():
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--train-subset", type=int, default=5000)
     p.add_argument("--test-subset", type=int, default=1000)
+    p.add_argument("--val-subset", type=int, default=None)
     p.add_argument(
         "--data-mode",
         type=str,
@@ -405,31 +333,25 @@ if __name__ == "__main__":
         test_individual_components()
         print("\n")
 
-    # 进行MNIST训练
     try:
-        train_losses, train_accuracies, test_accuracies = train_mnist(
+        train_losses, train_accuracies, _, final_test_accuracy = train_mnist(
             seed=args.seed,
             num_epochs=args.epochs,
             batch_size=args.batch_size,
             lr=args.lr,
             train_subset_size=args.train_subset,
             test_subset_size=args.test_subset,
+            val_subset_size=args.val_subset,
             data_mode=args.data_mode,
             save_model_params=not args.no_save_params,
         )
 
-        print("\nMNIST训练总结:")
-        print(f"最终训练准确率: {train_accuracies[-1]:.4f}")
-        print(f"最终测试准确率: {test_accuracies[-1]:.4f}")
-        print("MNIST神经网络训练测试成功完成!")
-
+        print("\nMNIST training summary:")
+        print(f"Final train accuracy: {train_accuracies[-1]:.4f}")
+        print(f"Final test accuracy:  {final_test_accuracy:.4f}")
+        print("MNIST training completed successfully.")
     except Exception as e:
-        print(f"MNIST训练过程中出现错误: {e}")
+        print(f"MNIST training failed: {e}")
         import traceback
 
         traceback.print_exc()
-
-
-
-
-

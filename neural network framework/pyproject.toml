@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "neural-network-framework"
+version = "0.1.0"
+description = "A lightweight NumPy-based deep learning framework"
+authors = [
+    { name = "Author", email = "author@example.com" }
+]
+license = { file = "LICENSE" }
+readme = "README.md"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+requires-python = ">=3.7"
+dependencies = [
+    "numpy>=1.21.0"
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0.0"
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [".git", ".pytest_cache", "__pycache__", "pytest-cache-files-*", "mnist_data", "fashion_mnist_data", "cifar10_data", ".idea"]
+addopts = ["-p", "no:cacheprovider"]

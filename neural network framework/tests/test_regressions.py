@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from data import Dataset, DataLoader
 from autograd import find_topo_sort
@@ -133,6 +134,34 @@ def test_module_parameters_deduplicate_shared_parameter():
     params = module.parameters()
     assert len(params) == 1
     assert params[0] is module.p1
+
+
+def test_module_state_dict_roundtrip_restores_parameters():
+    model = Sequential(Linear(4, 3), Linear(3, 2))
+
+    original_state = model.state_dict()
+
+    for param in model.parameters():
+        param.cached_data = np.zeros_like(param.realize_cached_data())
+
+    result = model.load_state_dict(original_state)
+    assert result["missing_keys"] == []
+    assert result["unexpected_keys"] == []
+
+    for name, param in model.named_parameters():
+        np.testing.assert_allclose(param.realize_cached_data(), original_state[name])
+
+
+def test_module_load_state_dict_strict_checks_missing_and_unexpected():
+    model = Sequential(Linear(2, 2))
+
+    with pytest.raises(KeyError):
+        model.load_state_dict({})
+
+    state = model.state_dict()
+    state["unexpected.param"] = np.array([1.0], dtype=np.float32)
+    with pytest.raises(KeyError):
+        model.load_state_dict(state)
 
 
 def test_find_topo_sort_visits_all_roots():
