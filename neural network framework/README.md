@@ -17,6 +17,9 @@
   - `SEBlock`（更适合图像任务的通道注意力）
 - 优化器：`SGD`、`Adam`
 - 数据管道：`Dataset`、`DataLoader`
+- 训练工具：`Trainer`、`split_train_val`、梯度裁剪、学习率调度器
+- 模型管理：`state_dict()` / `load_state_dict()`、checkpoint 保存与恢复
+- 数据增强：`Normalize`、`RandomHorizontalFlip`、`RandomCrop`、`Resize`、`Compose`
 
 ## 快速开始
 
@@ -52,6 +55,11 @@
 - `nn.py`：网络模块与层实现
 - `optimizers.py`：优化器
 - `data.py`：`Dataset` / `DataLoader`
+- `trainer.py`：训练循环与训练/验证集切分
+- `lr_scheduler.py`：`StepLR`、`CosineAnnealingLR`、`MultiStepLR`
+- `grad_utils.py`：梯度裁剪与梯度统计
+- `checkpoint.py`：模型和训练 checkpoint 保存/加载
+- `transforms.py`：基础数据增强
 - `tests/`：核心、回归、注意力、Transformer 相关测试
 - `test_mnist.py`：MNIST 训练脚本
 - `fashion_mnist.py`：Fashion-MNIST 训练脚本
@@ -73,15 +81,14 @@
 - `mse_loss`
 - `nll_loss`
 
-2. 正则化与训练工具
-- `clip_grad_norm`
-- 学习率调度器（如 `StepLR`、`CosineAnnealingLR`）
-
-3. 视觉增强
+2. 视觉算子
 - `max_pool2d`、`avg_pool2d`
-- 数据增强（`RandomCrop`、`RandomHorizontalFlip`、`Normalize`）
 
-4. 工程能力
-- `state_dict()` / `load_state_dict()`
-- checkpoint 保存与恢复
+3. 工程能力
 - 数值梯度检查工具
+- 更规范的包结构（例如 `src/` 布局）
+- lint/format/type-check 工具链
+
+4. 优化器
+- `RMSprop`
+- 带 momentum / weight decay 的优化器变体

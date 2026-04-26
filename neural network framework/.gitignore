@@ -6,6 +6,7 @@ __pycache__/
 # Test/cache artifacts
 .pytest_cache/
 pytest-cache-files-*/
+.codex-tmp/
 .coverage
 htmlcov/
 .tox/
@@ -26,10 +27,12 @@ htmlcov/
 mnist_data/
 fashion_mnist_data/
 cifar10_data/
+logs/
 *_model_params.npz
 *.ckpt
 *.pt
 *.pth
+extracted_code.py
 
 # Misc
 *.log

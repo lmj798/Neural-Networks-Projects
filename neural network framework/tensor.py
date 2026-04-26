@@ -246,7 +246,10 @@ class Tensor(Value):
     @data.setter
     def data(self, value):
         """设置张量数据"""
-        self.cached_data = value.realize_cached_data()
+        if isinstance(value, Tensor):
+            self.cached_data = value.realize_cached_data()
+        else:
+            self.cached_data = numpy.array(value, dtype=self.dtype)
 
     @property
     def shape(self):
@@ -278,6 +281,9 @@ class Tensor(Value):
         else:
             from ops import AddScalar
             return AddScalar(other)(self)
+
+    def __radd__(self, other):
+        return self.__add__(other)
         
     def __mul__(self, other):
         if isinstance(other, Tensor):
@@ -286,6 +292,9 @@ class Tensor(Value):
         else:
             from ops import MulScalar
             return MulScalar(other)(self)
+
+    def __rmul__(self, other):
+        return self.__mul__(other)
         
     def __sub__(self, other):
         if isinstance(other, Tensor):
@@ -295,6 +304,10 @@ class Tensor(Value):
             from ops import AddScalar
             return AddScalar(-other)(self)
 
+    def __rsub__(self, other):
+        from ops import AddScalar, Negate
+        return AddScalar(other)(Negate()(self))
+
     def __truediv__(self, other):
         if isinstance(other, Tensor):
             from ops import EWiseDiv
@@ -302,6 +315,10 @@ class Tensor(Value):
         else:
             from ops import DivScalar
             return DivScalar(other)(self)
+
+    def __rtruediv__(self, other):
+        from ops import EWiseDiv
+        return EWiseDiv()(Tensor.make_const(numpy.array(other, dtype=self.dtype)), self)
 
     def __matmul__(self, other):
         from ops import MatMul

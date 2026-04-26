@@ -30,6 +30,24 @@ def test_random_crop():
     assert result.shape == (2, 2)
 
 
+def test_random_crop_allows_same_size_crop():
+    x = np.arange(16, dtype=np.float32).reshape(4, 4)
+    transform = RandomCrop(size=(4, 4), padding=0)
+
+    result = transform(x)
+
+    np.testing.assert_allclose(result, x)
+
+
+def test_random_crop_pads_2d_images():
+    x = np.arange(16, dtype=np.float32).reshape(4, 4)
+    transform = RandomCrop(size=(2, 2), padding=1)
+
+    result = transform(x)
+
+    assert result.shape == (2, 2)
+
+
 def test_resize():
     """测试 resize 变换"""
     x = np.array([[0, 1], [2, 3]], dtype=np.float32)

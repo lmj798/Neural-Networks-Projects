@@ -89,11 +89,16 @@ class RandomCrop(Transform):
         new_h, new_w = self.size
         
         if self.padding > 0:
-            x = np.pad(x, ((self.padding, self.padding), (self.padding, self.padding), (0, 0)), mode='constant')
+            pad_width = [(self.padding, self.padding), (self.padding, self.padding)]
+            pad_width.extend([(0, 0)] * max(x.ndim - 2, 0))
+            x = np.pad(x, pad_width, mode='constant')
             h, w = x.shape[:2]
         
-        top = np.random.randint(0, h - new_h)
-        left = np.random.randint(0, w - new_w)
+        if new_h > h or new_w > w:
+            raise ValueError("crop size must be less than or equal to image size")
+        
+        top = np.random.randint(0, h - new_h + 1)
+        left = np.random.randint(0, w - new_w + 1)
         
         return x[top:top+new_h, left:left+new_w]
 

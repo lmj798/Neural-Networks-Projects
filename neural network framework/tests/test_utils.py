@@ -27,6 +27,19 @@ def test_step_lr():
     assert abs(optimizer.lr - 0.001) < 1e-8
 
 
+def test_step_lr_keeps_decayed_rate_between_steps():
+    model = Linear(10, 5)
+    optimizer = SGD(model.parameters(), lr=1.0)
+    scheduler = StepLR(optimizer, step_size=2, gamma=0.1)
+
+    lrs = []
+    for epoch in range(1, 6):
+        scheduler.step(epoch=epoch)
+        lrs.append(optimizer.lr)
+
+    assert lrs == pytest.approx([1.0, 0.1, 0.1, 0.01, 0.01])
+
+
 def test_cosine_annealing_lr():
     """测试 CosineAnnealingLR 调度器"""
     model = Linear(10, 5)
@@ -58,6 +71,19 @@ def test_multistep_lr():
     # 第 10 个 epoch 后应该再次衰减
     scheduler.step(epoch=10)
     assert abs(optimizer.lr - 0.0001) < 1e-8
+
+
+def test_multistep_lr_keeps_decayed_rate_between_milestones():
+    model = Linear(10, 5)
+    optimizer = SGD(model.parameters(), lr=1.0)
+    scheduler = MultiStepLR(optimizer, milestones=[2, 4], gamma=0.1)
+
+    lrs = []
+    for epoch in range(1, 6):
+        scheduler.step(epoch=epoch)
+        lrs.append(optimizer.lr)
+
+    assert lrs == pytest.approx([1.0, 0.1, 0.1, 0.01, 0.01])
 
 
 def test_clip_grad_norm():
@@ -245,3 +271,11 @@ def test_training_config_validation():
     assert "epochs must be positive" in errors
     assert "batch_size must be positive" in errors
     assert "lr must be positive" in errors
+
+
+def test_training_config_rejects_unimplemented_optimizer():
+    config = TrainingConfig(optimizer="rmsprop")
+
+    errors = config.validate()
+
+    assert "Unknown optimizer: rmsprop" in errors

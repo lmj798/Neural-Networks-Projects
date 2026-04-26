@@ -95,7 +95,7 @@ class TrainingConfig:
         if self.lr <= 0:
             errors.append("lr must be positive")
         
-        if self.optimizer not in ["adam", "sgd", "rmsprop"]:
+        if self.optimizer not in ["adam", "sgd"]:
             errors.append(f"Unknown optimizer: {self.optimizer}")
         
         if self.use_scheduler:

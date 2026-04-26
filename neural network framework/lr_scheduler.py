@@ -73,13 +73,8 @@ class StepLR(LRScheduler):
         Returns:
             List[float]: 新的学习率
         """
-        if self.last_epoch == 0:
-            return self.base_lrs
-        
-        if self.last_epoch % self.step_size == 0:
-            return [base_lr * self.gamma for base_lr in self.base_lrs]
-        
-        return self.base_lrs
+        factor = self.gamma ** (self.last_epoch // self.step_size)
+        return [base_lr * factor for base_lr in self.base_lrs]
 
 
 class CosineAnnealingLR(LRScheduler):
@@ -159,9 +154,5 @@ class MultiStepLR(LRScheduler):
         Returns:
             List[float]: 新的学习率
         """
-        if self.last_epoch not in self.milestones:
-            return self.base_lrs
-        
-        # 计算当前 epoch 是第几个 milestone
         milestone_count = sum(1 for m in self.milestones if m <= self.last_epoch)
         return [base_lr * (self.gamma ** milestone_count) for base_lr in self.base_lrs]

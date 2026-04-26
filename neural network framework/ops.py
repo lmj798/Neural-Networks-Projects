@@ -302,7 +302,11 @@ def _col2im(cols, x_shape, kernel_h, kernel_w, stride, padding, out_h, out_w):
             y_indices = numpy.arange(y, y + stride * out_h, stride)
             x_indices = numpy.arange(x, x + stride * out_w, stride)
             # 使用向量化赋值
-            x_padded[:, :, y_indices, x_indices] += cols_reshaped[:, :, y, x, :, :]
+            numpy.add.at(
+                x_padded,
+                (slice(None), slice(None), y_indices[:, None], x_indices[None, :]),
+                cols_reshaped[:, :, y, x, :, :],
+            )
 
     if padding > 0:
         return x_padded[:, :, padding:-padding, padding:-padding]

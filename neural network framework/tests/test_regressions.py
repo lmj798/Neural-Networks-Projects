@@ -5,7 +5,7 @@ from data import Dataset, DataLoader
 from autograd import find_topo_sort
 from init import init_He
 from nn import Dropout, Linear, Module, Parameter, Sequential
-from ops import softmax_cross_entropy
+from ops import conv2d, softmax_cross_entropy
 from tensor import Op, Tensor, Value
 
 
@@ -190,3 +190,41 @@ def test_softmax_cross_entropy_gradient_matches_expected():
     expected_grad /= logits_data.shape[0]
 
     np.testing.assert_allclose(logits.grad.realize_cached_data(), expected_grad, rtol=1e-6, atol=1e-6)
+
+
+def test_conv2d_backward_computes_input_and_weight_gradients():
+    x = Tensor(np.ones((1, 1, 4, 4), dtype=np.float32), requires_grad=True)
+    weight = Tensor(np.ones((1, 1, 3, 3), dtype=np.float32), requires_grad=True)
+
+    loss = conv2d(x, weight).sum()
+    loss.backward()
+
+    expected_x_grad = np.array(
+        [[[[1, 2, 2, 1],
+           [2, 4, 4, 2],
+           [2, 4, 4, 2],
+           [1, 2, 2, 1]]]],
+        dtype=np.float32,
+    )
+    expected_weight_grad = np.full((1, 1, 3, 3), 4.0, dtype=np.float32)
+
+    np.testing.assert_allclose(x.grad.realize_cached_data(), expected_x_grad)
+    np.testing.assert_allclose(weight.grad.realize_cached_data(), expected_weight_grad)
+
+
+def test_tensor_supports_scalar_left_hand_arithmetic():
+    x = Tensor(np.array([1.0, 2.0], dtype=np.float32), requires_grad=False)
+
+    np.testing.assert_allclose((1.0 + x).realize_cached_data(), np.array([2.0, 3.0], dtype=np.float32))
+    np.testing.assert_allclose((2.0 * x).realize_cached_data(), np.array([2.0, 4.0], dtype=np.float32))
+    np.testing.assert_allclose((5.0 - x).realize_cached_data(), np.array([4.0, 3.0], dtype=np.float32))
+    np.testing.assert_allclose((4.0 / x).realize_cached_data(), np.array([4.0, 2.0], dtype=np.float32))
+
+
+def test_tensor_data_setter_accepts_numpy_arrays():
+    x = Tensor(np.array([1.0, 2.0], dtype=np.float32), requires_grad=False)
+    replacement = np.array([3.0, 4.0], dtype=np.float32)
+
+    x.data = replacement
+
+    np.testing.assert_allclose(x.realize_cached_data(), replacement)
