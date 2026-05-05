@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Tuple
 import numpy
 
 from init import init_He, init_Xavier
-from ops import conv2d, elu, layer_norm_last_dim, leaky_relu, relu, sigmoid, softmax, tanh
+from ops import batch_norm, conv2d, elu, layer_norm_last_dim, leaky_relu, max_pool2d, avg_pool2d, relu, sigmoid, softmax, tanh
 from tensor import Tensor
 
 
@@ -121,6 +121,32 @@ class Module(ABC):
         self.training = True
         for m in self._children():
             m.training = True
+
+    def zero_grad(self):
+        for p in self.parameters():
+            p.grad = None
+
+    def __repr__(self):
+        return _module_repr(self, indent=0)
+
+
+def _module_repr(module: "Module", indent: int = 0) -> str:
+    prefix = "  " * indent
+    name = module.__class__.__name__
+    lines = [f"{prefix}{name}("]
+    children = []
+    for k, v in module.__dict__.items():
+        if k.startswith("_"):
+            continue
+        if isinstance(v, Module):
+            children.append((k, v))
+        elif isinstance(v, Parameter):
+            shape = tuple(v.shape)
+            lines.append(f"{prefix}  ({k}): Parameter{shape}")
+    for k, v in children:
+        lines.append(f"{prefix}  ({k}): {_module_repr(v, indent + 1)}")
+    lines.append(f"{prefix})")
+    return "\n".join(lines)
 
 
 class Parameter(Tensor):
@@ -490,3 +516,257 @@ class Flatten(Module):
     def forward(self, X):
         size = reduce(lambda a, b: a * b, X.shape[1:])  # Flatten every dimension except batch.
         return X.reshape((X.shape[0], size))
+
+
+class MaxPool2d(Module):
+    def __init__(self, kernel_size, stride=None, padding=0):
+        super().__init__()
+        if isinstance(kernel_size, int):
+            self.kernel_size = (kernel_size, kernel_size)
+        else:
+            self.kernel_size = tuple(kernel_size)
+        self.stride = stride
+        self.padding = padding
+
+    def forward(self, x: Tensor) -> Tensor:
+        return max_pool2d(x, self.kernel_size, stride=self.stride, padding=self.padding)
+
+
+class AvgPool2d(Module):
+    def __init__(self, kernel_size, stride=None, padding=0):
+        super().__init__()
+        if isinstance(kernel_size, int):
+            self.kernel_size = (kernel_size, kernel_size)
+        else:
+            self.kernel_size = tuple(kernel_size)
+        self.stride = stride
+        self.padding = padding
+
+    def forward(self, x: Tensor) -> Tensor:
+        return avg_pool2d(x, self.kernel_size, stride=self.stride, padding=self.padding)
+
+
+class BatchNorm1d(Module):
+    def __init__(self, num_features, eps=1e-5, momentum=0.1, dtype="float32"):
+        super().__init__()
+        self.num_features = num_features
+        self.eps = eps
+        self.momentum = momentum
+        self.weight = Parameter(numpy.ones(num_features, dtype=dtype), dtype=dtype)
+        self.bias = Parameter(numpy.zeros(num_features, dtype=dtype), dtype=dtype)
+        self.register_buffer("running_mean", numpy.zeros(num_features, dtype=dtype))
+        self.register_buffer("running_var", numpy.ones(num_features, dtype=dtype))
+
+    def forward(self, x: Tensor) -> Tensor:
+        if self.training:
+            x_data = x.realize_cached_data()
+            mean = numpy.mean(x_data, axis=0)
+            var = numpy.var(x_data, axis=0)
+            self.running_mean = (1 - self.momentum) * self.running_mean + self.momentum * mean
+            self.running_var = (1 - self.momentum) * self.running_var + self.momentum * var
+            return batch_norm(x, self.weight, self.bias, axes=(0,), eps=self.eps)
+
+        mean_tensor = Tensor(self.running_mean.reshape(1, -1).broadcast_to((x.shape[0], self.num_features)).realize_cached_data() * 0 + self.running_mean, requires_grad=False)
+        var_tensor = Tensor(self.running_var.reshape(1, -1).broadcast_to((x.shape[0], self.num_features)).realize_cached_data() * 0 + self.running_var, requires_grad=False)
+        inv_std = 1.0 / numpy.sqrt(var_tensor.realize_cached_data() + self.eps)
+        x_hat = (x.realize_cached_data() - mean_tensor.realize_cached_data()) * inv_std
+        return Tensor(x_hat, requires_grad=x.requires_grad) * self.weight + self.bias
+
+    def register_buffer(self, name, value):
+        setattr(self, name, value)
+
+
+class BatchNorm2d(Module):
+    def __init__(self, num_features, eps=1e-5, momentum=0.1, dtype="float32"):
+        super().__init__()
+        self.num_features = num_features
+        self.eps = eps
+        self.momentum = momentum
+        self.weight = Parameter(numpy.ones(num_features, dtype=dtype), dtype=dtype)
+        self.bias = Parameter(numpy.zeros(num_features, dtype=dtype), dtype=dtype)
+        self.register_buffer("running_mean", numpy.zeros(num_features, dtype=dtype))
+        self.register_buffer("running_var", numpy.ones(num_features, dtype=dtype))
+
+    def forward(self, x: Tensor) -> Tensor:
+        if self.training:
+            x_data = x.realize_cached_data()
+            mean = numpy.mean(x_data, axis=(0, 2, 3))
+            var = numpy.var(x_data, axis=(0, 2, 3))
+            self.running_mean = (1 - self.momentum) * self.running_mean + self.momentum * mean
+            self.running_var = (1 - self.momentum) * self.running_var + self.momentum * var
+            return batch_norm(x, self.weight, self.bias, axes=(0, 2, 3), eps=self.eps)
+
+        n = x.shape[0]
+        h, w = x.shape[2], x.shape[3]
+        running_mean_b = self.running_mean.reshape(1, -1, 1, 1)
+        running_var_b = self.running_var.reshape(1, -1, 1, 1)
+        mean_tensor = Tensor(numpy.broadcast_to(running_mean_b, (n, self.num_features, h, w)).copy(), requires_grad=False)
+        var_tensor = Tensor(numpy.broadcast_to(running_var_b, (n, self.num_features, h, w)).copy(), requires_grad=False)
+        inv_std = 1.0 / numpy.sqrt(var_tensor.realize_cached_data() + self.eps)
+        x_data = x.realize_cached_data()
+        x_hat = (x_data - mean_tensor.realize_cached_data()) * inv_std
+        return Tensor(x_hat, requires_grad=x.requires_grad) * self.weight.reshape((1, self.num_features, 1, 1)).broadcast_to(x.shape) + self.bias.reshape((1, self.num_features, 1, 1)).broadcast_to(x.shape)
+
+    def register_buffer(self, name, value):
+        setattr(self, name, value)
+
+
+class RNN(Module):
+    def __init__(self, input_size, hidden_size, num_layers=1, nonlinearity="tanh",
+                 bias=True, dtype="float32"):
+        super().__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.nonlinearity = nonlinearity
+
+        self.cells = []
+        for layer in range(num_layers):
+            in_dim = input_size if layer == 0 else hidden_size
+            w_ih = Parameter(init_Xavier(in_dim, hidden_size, dtype=dtype), dtype=dtype)
+            w_hh = Parameter(init_Xavier(hidden_size, hidden_size, dtype=dtype), dtype=dtype)
+            b_ih = Parameter(numpy.zeros(hidden_size, dtype=dtype), dtype=dtype) if bias else None
+            b_hh = Parameter(numpy.zeros(hidden_size, dtype=dtype), dtype=dtype) if bias else None
+            setattr(self, f"w_ih_l{layer}", w_ih)
+            setattr(self, f"w_hh_l{layer}", w_hh)
+            if bias:
+                setattr(self, f"b_ih_l{layer}", b_ih)
+                setattr(self, f"b_hh_l{layer}", b_hh)
+            self.cells.append((w_ih, w_hh, b_ih, b_hh))
+
+    def forward(self, x: Tensor, h0=None) -> Tensor:
+        x_data = x.realize_cached_data()
+        batch_size, seq_len, _ = x_data.shape
+        dtype = x.dtype
+
+        h = []
+        for layer in range(self.num_layers):
+            if h0 is not None:
+                h0_data = h0.realize_cached_data() if isinstance(h0, Tensor) else h0
+                h.append(Tensor(h0_data.copy(), dtype=numpy.float32, requires_grad=False))
+            else:
+                h.append(Tensor(numpy.zeros((batch_size, self.hidden_size), dtype=numpy.float32), requires_grad=False))
+
+        for t in range(seq_len):
+            x_t = Tensor(x_data[:, t, :].copy(), dtype=dtype, requires_grad=False)
+            for layer in range(self.num_layers):
+                w_ih, w_hh, b_ih, b_hh = self.cells[layer]
+                inp = x_t if layer == 0 else h[layer]
+                gate = inp @ w_ih
+                if b_ih is not None:
+                    gate = gate + b_ih
+                gate = gate + h[layer] @ w_hh
+                if b_hh is not None:
+                    gate = gate + b_hh
+                h[layer] = tanh(gate) if self.nonlinearity == "tanh" else relu(gate)
+
+        return h[-1]
+
+
+class LSTM(Module):
+    def __init__(self, input_size, hidden_size, num_layers=1, bias=True, dtype="float32"):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+
+        for layer in range(num_layers):
+            in_dim = input_size if layer == 0 else hidden_size
+            for gate in ["i", "f", "g", "o"]:
+                w_ih = Parameter(init_Xavier(in_dim, hidden_size, dtype=dtype), dtype=dtype)
+                w_hh = Parameter(init_Xavier(hidden_size, hidden_size, dtype=dtype), dtype=dtype)
+                setattr(self, f"w_ih_{gate}_l{layer}", w_ih)
+                setattr(self, f"w_hh_{gate}_l{layer}", w_hh)
+            if bias:
+                for gate in ["i", "f", "g", "o"]:
+                    b_ih = Parameter(numpy.zeros(hidden_size, dtype=dtype), dtype=dtype)
+                    b_hh = Parameter(numpy.zeros(hidden_size, dtype=dtype), dtype=dtype)
+                    setattr(self, f"b_ih_{gate}_l{layer}", b_ih)
+                    setattr(self, f"b_hh_{gate}_l{layer}", b_hh)
+
+    def _lstm_step(self, x: Tensor, h: Tensor, c: Tensor, layer: int):
+        i = sigmoid(x @ getattr(self, f"w_ih_i_l{layer}") + h @ getattr(self, f"w_hh_i_l{layer}")
+                    + (getattr(self, f"b_ih_i_l{layer}") + getattr(self, f"b_hh_i_l{layer}")
+                       if hasattr(self, f"b_ih_i_l{layer}") else 0))
+        f = sigmoid(x @ getattr(self, f"w_ih_f_l{layer}") + h @ getattr(self, f"w_hh_f_l{layer}")
+                    + (getattr(self, f"b_ih_f_l{layer}") + getattr(self, f"b_hh_f_l{layer}")
+                       if hasattr(self, f"b_ih_f_l{layer}") else 0))
+        g = tanh(x @ getattr(self, f"w_ih_g_l{layer}") + h @ getattr(self, f"w_hh_g_l{layer}")
+                 + (getattr(self, f"b_ih_g_l{layer}") + getattr(self, f"b_hh_g_l{layer}")
+                    if hasattr(self, f"b_ih_g_l{layer}") else 0))
+        o = sigmoid(x @ getattr(self, f"w_ih_o_l{layer}") + h @ getattr(self, f"w_hh_o_l{layer}")
+                    + (getattr(self, f"b_ih_o_l{layer}") + getattr(self, f"b_hh_o_l{layer}")
+                       if hasattr(self, f"b_ih_o_l{layer}") else 0))
+        c_new = f * c + i * g
+        h_new = o * tanh(c_new)
+        return h_new, c_new
+
+    def forward(self, x: Tensor, h0=None, c0=None) -> Tensor:
+        x_data = x.realize_cached_data()
+        batch_size, seq_len, _ = x_data.shape
+        dtype = x.dtype
+
+        h = []
+        c = []
+        for layer in range(self.num_layers):
+            h.append(Tensor(numpy.zeros((batch_size, self.hidden_size), dtype=numpy.float32), requires_grad=False))
+            c.append(Tensor(numpy.zeros((batch_size, self.hidden_size), dtype=numpy.float32), requires_grad=False))
+
+        for t in range(seq_len):
+            x_t = Tensor(x_data[:, t, :].copy(), dtype=dtype, requires_grad=False)
+            for layer in range(self.num_layers):
+                inp = x_t if layer == 0 else h[layer]
+                h[layer], c[layer] = self._lstm_step(inp, h[layer], c[layer], layer)
+
+        return h[-1]
+
+
+class GRU(Module):
+    def __init__(self, input_size, hidden_size, num_layers=1, bias=True, dtype="float32"):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+
+        for layer in range(num_layers):
+            in_dim = input_size if layer == 0 else hidden_size
+            for gate in ["r", "z", "n"]:
+                w_ih = Parameter(init_Xavier(in_dim, hidden_size, dtype=dtype), dtype=dtype)
+                w_hh = Parameter(init_Xavier(hidden_size, hidden_size, dtype=dtype), dtype=dtype)
+                setattr(self, f"w_ih_{gate}_l{layer}", w_ih)
+                setattr(self, f"w_hh_{gate}_l{layer}", w_hh)
+            if bias:
+                for gate in ["r", "z", "n"]:
+                    b_ih = Parameter(numpy.zeros(hidden_size, dtype=dtype), dtype=dtype)
+                    b_hh = Parameter(numpy.zeros(hidden_size, dtype=dtype), dtype=dtype)
+                    setattr(self, f"b_ih_{gate}_l{layer}", b_ih)
+                    setattr(self, f"b_hh_{gate}_l{layer}", b_hh)
+
+    def _gru_step(self, x: Tensor, h: Tensor, layer: int):
+        r = sigmoid(x @ getattr(self, f"w_ih_r_l{layer}") + h @ getattr(self, f"w_hh_r_l{layer}")
+                    + (getattr(self, f"b_ih_r_l{layer}") + getattr(self, f"b_hh_r_l{layer}")
+                       if hasattr(self, f"b_ih_r_l{layer}") else 0))
+        z = sigmoid(x @ getattr(self, f"w_ih_z_l{layer}") + h @ getattr(self, f"w_hh_z_l{layer}")
+                    + (getattr(self, f"b_ih_z_l{layer}") + getattr(self, f"b_hh_z_l{layer}")
+                       if hasattr(self, f"b_ih_z_l{layer}") else 0))
+        n = tanh(x @ getattr(self, f"w_ih_n_l{layer}") + r * (h @ getattr(self, f"w_hh_n_l{layer}")
+                 + (getattr(self, f"b_hh_n_l{layer}") if hasattr(self, f"b_ih_n_l{layer}") else 0))
+                 + (getattr(self, f"b_ih_n_l{layer}") if hasattr(self, f"b_ih_n_l{layer}") else 0))
+        one = Tensor(1.0, requires_grad=False)
+        h_new = (one - z) * n + z * h
+        return h_new
+
+    def forward(self, x: Tensor, h0=None) -> Tensor:
+        x_data = x.realize_cached_data()
+        batch_size, seq_len, _ = x_data.shape
+        dtype = x.dtype
+
+        h = []
+        for layer in range(self.num_layers):
+            h.append(Tensor(numpy.zeros((batch_size, self.hidden_size), dtype=numpy.float32), requires_grad=False))
+
+        for t in range(seq_len):
+            x_t = Tensor(x_data[:, t, :].copy(), dtype=dtype, requires_grad=False)
+            for layer in range(self.num_layers):
+                inp = x_t if layer == 0 else h[layer]
+                h[layer] = self._gru_step(inp, h[layer], layer)
+
+        return h[-1]

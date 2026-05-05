@@ -114,30 +114,16 @@ class Resize(Transform):
         self.size = size
     
     def __call__(self, x: np.ndarray) -> np.ndarray:
-        """应用 resize
-        
-        Args:
-            x: 输入数据
-        
-        Returns:
-            np.ndarray: resize 后的数据
-        """
-        # 使用最近邻插值
         h, w = x.shape[:2]
         new_h, new_w = self.size
-        
+
+        src_i = np.minimum((np.arange(new_h) * h / new_h).astype(int), h - 1)
+        src_j = np.minimum((np.arange(new_w) * w / new_w).astype(int), w - 1)
+
         if len(x.shape) == 3:
-            new_x = np.zeros((new_h, new_w, x.shape[2]), dtype=x.dtype)
+            return x[src_i[:, None], src_j[None, :], :]
         else:
-            new_x = np.zeros((new_h, new_w), dtype=x.dtype)
-        
-        for i in range(new_h):
-            for j in range(new_w):
-                src_i = min(int(i * h / new_h), h - 1)
-                src_j = min(int(j * w / new_w), w - 1)
-                new_x[i, j] = x[src_i, src_j]
-        
-        return new_x
+            return x[src_i[:, None], src_j[None, :]]
 
 
 class Compose(Transform):

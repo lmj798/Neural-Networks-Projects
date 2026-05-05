@@ -102,7 +102,7 @@ class Negate(TensorOp):
         return numpy.negative(a)
 
     def gradient(self, out_grad, node):
-        return MulScalar(-1)(out_grad)
+        return (MulScalar(-1)(out_grad),)
 
 class EWiseDiv(TensorOp):
     def compute(self, a: NDArray, b: NDArray):
@@ -123,6 +123,18 @@ class DivScalar(TensorOp):
 
     def gradient(self, out_grad: Tensor, node: Tensor):
         return (out_grad / self.scalar,)
+
+class PowerScalar(TensorOp):
+    def __init__(self, scalar):
+        self.scalar = scalar
+
+    def compute(self, a: NDArray):
+        return numpy.power(a, self.scalar)
+
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        a = node.inputs[0].realize_cached_data()
+        grad = self.scalar * numpy.power(a, self.scalar - 1)
+        return (out_grad * Tensor(grad, dtype=a.dtype, requires_grad=False),)
 
 class MatMul(TensorOp):
     def compute(self, a: NDArray, b: NDArray):
@@ -465,10 +477,9 @@ class Sigmoid(TensorOp):
         return 1 / (1 + numpy.exp(-a))
 
     def gradient(self, out_grad, node):
-        a = node.inputs[0].realize_cached_data()
-        sig = 1 / (1 + numpy.exp(-a))
+        sig = node.realize_cached_data()
         grad = sig * (1 - sig)
-        return out_grad * Tensor(grad, dtype=a.dtype, requires_grad=False)
+        return out_grad * Tensor(grad, dtype=sig.dtype, requires_grad=False)
 
 def sigmoid(a):
     return Sigmoid()(a)
@@ -478,10 +489,9 @@ class Tanh(TensorOp):
         return numpy.tanh(a)
 
     def gradient(self, out_grad, node):
-        a = node.inputs[0].realize_cached_data()
-        t = numpy.tanh(a)
+        t = node.realize_cached_data()
         grad = 1 - t * t
-        return out_grad * Tensor(grad, dtype=a.dtype, requires_grad=False)
+        return out_grad * Tensor(grad, dtype=t.dtype, requires_grad=False)
 
 def tanh(a):
     return Tanh()(a)
@@ -515,3 +525,259 @@ class ELU(TensorOp):
 
 def elu(a, alpha=1.0):
     return ELU(alpha)(a)
+
+
+# ============================================================
+# Pooling operations
+# ============================================================
+
+class MaxPool2D(TensorOp):
+    def __init__(self, kernel_size, stride=None, padding=0):
+        if isinstance(kernel_size, int):
+            self.kernel_size = (kernel_size, kernel_size)
+        else:
+            self.kernel_size = tuple(kernel_size)
+        if stride is None:
+            self.stride = self.kernel_size
+        elif isinstance(stride, int):
+            self.stride = (stride, stride)
+        else:
+            self.stride = tuple(stride)
+        self.padding = padding
+
+    def compute(self, x: NDArray):
+        n, c, h, w = x.shape
+        kh, kw = self.kernel_size
+        sh, sw = self.stride
+        pad = self.padding
+
+        x_padded = numpy.pad(x, ((0, 0), (0, 0), (pad, pad), (pad, pad)), mode="constant",
+                             constant_values=-numpy.inf if x.dtype.kind == "f" else numpy.iinfo(x.dtype).min)
+        out_h = (h + 2 * pad - kh) // sh + 1
+        out_w = (w + 2 * pad - kw) // sw + 1
+
+        shape = (n, c, out_h, out_w, kh, kw)
+        strides = (x_padded.strides[0], x_padded.strides[1],
+                   x_padded.strides[2] * sh, x_padded.strides[3] * sw,
+                   x_padded.strides[2], x_padded.strides[3])
+        patches = numpy.lib.stride_tricks.as_strided(x_padded, shape=shape, strides=strides)
+        return numpy.max(patches, axis=(4, 5))
+
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        x = node.inputs[0].realize_cached_data()
+        n, c, h, w = x.shape
+        kh, kw = self.kernel_size
+        sh, sw = self.stride
+        pad = self.padding
+
+        dout = out_grad.realize_cached_data()
+        out_h, out_w = dout.shape[2], dout.shape[3]
+        h_padded, w_padded = h + 2 * pad, w + 2 * pad
+
+        x_padded = numpy.pad(x, ((0, 0), (0, 0), (pad, pad), (pad, pad)), mode="constant",
+                             constant_values=-numpy.inf if x.dtype.kind == "f" else numpy.iinfo(x.dtype).min)
+        shape = (n, c, out_h, out_w, kh, kw)
+        strides = (x_padded.strides[0], x_padded.strides[1],
+                   x_padded.strides[2] * sh, x_padded.strides[3] * sw,
+                   x_padded.strides[2], x_padded.strides[3])
+        patches = numpy.lib.stride_tricks.as_strided(x_padded, shape=shape, strides=strides)
+        patches_flat = patches.reshape(n, c, out_h, out_w, -1)
+        argmax = numpy.argmax(patches_flat, axis=4)
+
+        oh_idx = numpy.arange(out_h).reshape(1, 1, out_h, 1)
+        ow_idx = numpy.arange(out_w).reshape(1, 1, 1, out_w)
+        h_in = oh_idx * sh + (argmax // kw)
+        w_in = ow_idx * sw + (argmax % kw)
+
+        grad_input = numpy.zeros((n * c, h_padded, w_padded), dtype=dout.dtype)
+        dout_flat = dout.reshape(n * c, out_h, out_w)
+        h_in_flat = h_in.reshape(n * c, out_h, out_w)
+        w_in_flat = w_in.reshape(n * c, out_h, out_w)
+
+        for nc in range(n * c):
+            numpy.add.at(grad_input[nc], (h_in_flat[nc], w_in_flat[nc]), dout_flat[nc])
+
+        grad_input = grad_input.reshape(n, c, h_padded, w_padded)
+        if pad > 0:
+            grad_input = grad_input[:, :, pad:-pad, pad:-pad]
+
+        return Tensor(grad_input, requires_grad=False)
+
+
+def max_pool2d(a, kernel_size, stride=None, padding=0):
+    return MaxPool2D(kernel_size=kernel_size, stride=stride, padding=padding)(a)
+
+
+class AvgPool2D(TensorOp):
+    def __init__(self, kernel_size, stride=None, padding=0):
+        if isinstance(kernel_size, int):
+            self.kernel_size = (kernel_size, kernel_size)
+        else:
+            self.kernel_size = tuple(kernel_size)
+        if stride is None:
+            self.stride = self.kernel_size
+        elif isinstance(stride, int):
+            self.stride = (stride, stride)
+        else:
+            self.stride = tuple(stride)
+        self.padding = padding
+
+    def compute(self, x: NDArray):
+        n, c, h, w = x.shape
+        kh, kw = self.kernel_size
+        sh, sw = self.stride
+        pad = self.padding
+
+        x_padded = numpy.pad(x, ((0, 0), (0, 0), (pad, pad), (pad, pad)), mode="constant")
+        out_h = (h + 2 * pad - kh) // sh + 1
+        out_w = (w + 2 * pad - kw) // sw + 1
+
+        shape = (n, c, out_h, out_w, kh, kw)
+        strides = (x_padded.strides[0], x_padded.strides[1],
+                   x_padded.strides[2] * sh, x_padded.strides[3] * sw,
+                   x_padded.strides[2], x_padded.strides[3])
+        patches = numpy.lib.stride_tricks.as_strided(x_padded, shape=shape, strides=strides)
+        return numpy.mean(patches, axis=(4, 5))
+
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        x = node.inputs[0].realize_cached_data()
+        n, c, h, w = x.shape
+        kh, kw = self.kernel_size
+        sh, sw = self.stride
+        pad = self.padding
+
+        dout = out_grad.realize_cached_data()
+        out_h, out_w = dout.shape[2], dout.shape[3]
+        h_padded, w_padded = h + 2 * pad, w + 2 * pad
+        scale = 1.0 / (kh * kw)
+
+        grad_input = numpy.zeros((n, c, h_padded, w_padded), dtype=dout.dtype)
+        for oi in range(out_h):
+            for oj in range(out_w):
+                hs = oi * sh
+                ws = oj * sw
+                grad_input[:, :, hs:hs + kh, ws:ws + kw] += dout[:, :, oi:oi + 1, oj:oj + 1] * scale
+
+        if pad > 0:
+            grad_input = grad_input[:, :, pad:-pad, pad:-pad]
+
+        return Tensor(grad_input, requires_grad=False)
+
+
+def avg_pool2d(a, kernel_size, stride=None, padding=0):
+    return AvgPool2D(kernel_size=kernel_size, stride=stride, padding=padding)(a)
+
+
+# ============================================================
+# Loss functions
+# ============================================================
+
+class MSELoss(TensorOp):
+    def compute(self, pred: NDArray, target: NDArray):
+        return numpy.mean((pred - target) ** 2)
+
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        pred, target = node.inputs
+        pred_data = pred.realize_cached_data()
+        target_data = target.realize_cached_data()
+        n = pred_data.size
+        grad_pred = 2.0 * (pred_data - target_data) / n * out_grad.realize_cached_data()
+        grad_target = -2.0 * (pred_data - target_data) / n * out_grad.realize_cached_data()
+        return (
+            Tensor(grad_pred.astype(pred_data.dtype, copy=False), requires_grad=False),
+            Tensor(grad_target.astype(target_data.dtype, copy=False), requires_grad=False),
+        )
+
+
+def mse_loss(pred, target):
+    return MSELoss()(pred, target)
+
+
+class BCELoss(TensorOp):
+    def compute(self, logits: NDArray, target: NDArray):
+        logits_clamped = numpy.clip(logits, -100, 100)
+        loss = numpy.maximum(logits_clamped, 0) - logits_clamped * target + numpy.log(1 + numpy.exp(-numpy.abs(logits_clamped)))
+        return numpy.mean(loss)
+
+    def gradient(self, out_grad: Tensor, node: Tensor):
+        logits, target = node.inputs
+        logits_data = logits.realize_cached_data()
+        target_data = target.realize_cached_data()
+        probs = 1.0 / (1.0 + numpy.exp(-logits_data))
+        n = logits_data.size
+        grad_logits = (probs - target_data) / n * out_grad.realize_cached_data()
+        grad_target = numpy.zeros_like(target_data, dtype=numpy.float32)
+        return (
+            Tensor(grad_logits.astype(logits_data.dtype, copy=False), requires_grad=False),
+            Tensor(grad_target.astype(target_data.dtype, copy=False), requires_grad=False),
+        )
+
+
+def bce_loss(logits, target):
+    return BCELoss()(logits, target)
+
+
+# ============================================================
+# Batch Normalization
+# ============================================================
+
+class BatchNorm(TensorOp):
+    def __init__(self, axes, eps=1e-5):
+        self.axes = tuple(axes)
+        self.eps = eps
+
+    def compute(self, x: NDArray, gamma: NDArray, beta: NDArray):
+        mean = numpy.mean(x, axis=self.axes, keepdims=True)
+        var = numpy.var(x, axis=self.axes, keepdims=True)
+        inv_std = 1.0 / numpy.sqrt(var + self.eps)
+        x_hat = (x - mean) * inv_std
+        gamma_b = gamma.reshape(self._broadcast_shape(x.ndim, gamma))
+        beta_b = beta.reshape(self._broadcast_shape(x.ndim, beta))
+        return x_hat * gamma_b + beta_b
+
+    def _broadcast_shape(self, ndim, param):
+        shape = [1] * ndim
+        for ax in self.axes:
+            pass
+        dims_not_reduced = [d for d in range(ndim) if d not in self.axes]
+        for i, d in enumerate(dims_not_reduced):
+            shape[d] = param.shape[i]
+        return tuple(shape)
+
+    def gradient(self, out_grad, node):
+        x, gamma, beta = node.inputs
+        x_data = x.realize_cached_data()
+        gamma_data = gamma.realize_cached_data()
+        out_grad_data = out_grad.realize_cached_data()
+
+        mean = numpy.mean(x_data, axis=self.axes, keepdims=True)
+        var = numpy.var(x_data, axis=self.axes, keepdims=True)
+        inv_std = 1.0 / numpy.sqrt(var + self.eps)
+        x_centered = x_data - mean
+        x_hat = x_centered * inv_std
+
+        gamma_b = gamma_data.reshape(self._broadcast_shape(x_data.ndim, gamma_data))
+        grad_gamma = numpy.sum(out_grad_data * x_hat, axis=self.axes)
+        grad_beta = numpy.sum(out_grad_data, axis=self.axes)
+
+        n = 1
+        for ax in self.axes:
+            n *= x_data.shape[ax]
+
+        dx_hat = out_grad_data * gamma_b
+        dvar = numpy.sum(dx_hat * x_centered * -0.5 * (inv_std ** 3), axis=self.axes, keepdims=True)
+        dmean = (
+            numpy.sum(dx_hat * -inv_std, axis=self.axes, keepdims=True)
+            + dvar * numpy.mean(-2.0 * x_centered, axis=self.axes, keepdims=True)
+        )
+        grad_x = dx_hat * inv_std + dvar * (2.0 * x_centered / n) + dmean / n
+
+        return (
+            Tensor(grad_x.astype(x_data.dtype, copy=False), requires_grad=False),
+            Tensor(grad_gamma.astype(gamma_data.dtype, copy=False), requires_grad=False),
+            Tensor(grad_beta.astype(gamma_data.dtype, copy=False), requires_grad=False),
+        )
+
+
+def batch_norm(x, gamma, beta, axes, eps=1e-5):
+    return BatchNorm(axes=axes, eps=eps)(x, gamma, beta)

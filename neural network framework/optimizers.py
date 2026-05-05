@@ -19,11 +19,12 @@ class Optimizer(ABC):
             p.grad = None
 
 class SGD(Optimizer):
-    def __init__(self, params, lr = 0.01):
+    def __init__(self, params, lr = 0.01, weight_decay=0.0):
         if not isinstance(lr, (int, float)) or lr <= 0:
             raise ValueError("Learning rate must be a positive number")
         super().__init__(params)
         self.lr = lr
+        self.weight_decay = weight_decay
 
     def step(self):
         for param in self.params:
@@ -36,12 +37,16 @@ class SGD(Optimizer):
                 param_data = param.realize_cached_data()
                 if param_data.shape != grad_data.shape:
                     raise ValueError(f"Shape mismatch: param shape {param_data.shape}, grad shape {grad_data.shape}")
+                
+                if self.weight_decay != 0:
+                    grad_data = grad_data + self.weight_decay * param_data
+                
                 new_data = param_data - self.lr * grad_data
 
                 param.cached_data = new_data
 
 class Adam(Optimizer):
-    def __init__(self, params, lr=0.001, betas=(0.9, 0.999), eps=1e-8):
+    def __init__(self, params, lr=0.001, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.0):
         if not isinstance(lr, (int, float)) or lr <= 0:
             raise ValueError("Learning rate must be a positive number")
         if not isinstance(betas, (list, tuple)) or len(betas) != 2:
@@ -55,6 +60,7 @@ class Adam(Optimizer):
         self.beta1 = betas[0]
         self.beta2 = betas[1]
         self.eps = eps
+        self.weight_decay = weight_decay
         self.t = 0
 
         self.m = []
@@ -79,6 +85,9 @@ class Adam(Optimizer):
                     raise ValueError(f"Shape mismatch: param shape {param_data.shape}, grad shape {grad_data.shape}")
                 if i >= len(self.m) or i >= len(self.v):
                     raise IndexError(f"Parameter index {i} out of bounds for Adam state")
+
+                if self.weight_decay != 0:
+                    grad_data = grad_data + self.weight_decay * param_data
 
                 self.m[i] = self.beta1 * self.m[i] + (1 - self.beta1) * grad_data
                 self.v[i] = self.beta2 * self.v[i] + (1 - self.beta2) * (grad_data ** 2)

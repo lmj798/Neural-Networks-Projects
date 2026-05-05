@@ -308,6 +308,14 @@ class Tensor(Value):
         from ops import AddScalar, Negate
         return AddScalar(other)(Negate()(self))
 
+    def __neg__(self):
+        from ops import Negate
+        return Negate()(self)
+
+    def __pow__(self, other):
+        from ops import PowerScalar
+        return PowerScalar(other)(self)
+
     def __truediv__(self, other):
         if isinstance(other, Tensor):
             from ops import EWiseDiv

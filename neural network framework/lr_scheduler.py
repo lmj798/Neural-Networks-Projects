@@ -156,3 +156,53 @@ class MultiStepLR(LRScheduler):
         """
         milestone_count = sum(1 for m in self.milestones if m <= self.last_epoch)
         return [base_lr * (self.gamma ** milestone_count) for base_lr in self.base_lrs]
+
+
+class LinearWarmup(LRScheduler):
+    def __init__(self, optimizer, warmup_epochs: int, start_factor: float = 0.001,
+                 end_factor: float = 1.0, last_epoch: int = -1):
+        if warmup_epochs <= 0:
+            raise ValueError("warmup_epochs must be positive")
+        if not (0.0 <= start_factor <= 1.0):
+            raise ValueError("start_factor must be in [0, 1]")
+        self.warmup_epochs = warmup_epochs
+        self.start_factor = start_factor
+        self.end_factor = end_factor
+        super().__init__(optimizer, last_epoch)
+
+    def get_lr(self) -> List[float]:
+        if self.last_epoch >= self.warmup_epochs:
+            factor = self.end_factor
+        else:
+            alpha = float(self.last_epoch) / max(1, self.warmup_epochs)
+            factor = self.start_factor + (self.end_factor - self.start_factor) * alpha
+        return [base_lr * factor for base_lr in self.base_lrs]
+
+
+class SequentialLR(LRScheduler):
+    def __init__(self, optimizer, schedulers: List[LRScheduler], milestones: List[int],
+                 last_epoch: int = -1):
+        if len(schedulers) != len(milestones) + 1:
+            raise ValueError("Number of schedulers must be len(milestones) + 1")
+        for sched in schedulers:
+            sched.base_lrs = [optimizer.lr]
+        self.schedulers = schedulers
+        self.milestones = milestones
+        super().__init__(optimizer, last_epoch)
+
+    def get_lr(self) -> List[float]:
+        idx = 0
+        for m in self.milestones:
+            if self.last_epoch < m:
+                break
+            idx += 1
+        scheduler = self.schedulers[idx]
+        scheduler.last_epoch = self.last_epoch - (self.milestones[idx - 1] if idx > 0 else 0)
+        return scheduler.get_lr()
+
+    def step(self, epoch: int = None):
+        if epoch is None:
+            epoch = self.last_epoch + 1
+        self.last_epoch = epoch
+        lrs = self.get_lr()
+        self.optimizer.lr = lrs[0] if len(lrs) == 1 else lrs[0]
